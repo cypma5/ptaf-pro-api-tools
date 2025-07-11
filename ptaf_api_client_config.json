@@ -1,0 +1,8 @@
+{
+    "ptaf_url": "https://<FQDN OR IP PTAF API>",
+    "username": "<Login>",
+    "password": "<Password>",
+    "api_path": "/api/ptaf/v4",
+    "verify_ssl": false,
+    "ssl_cert_path": null
+}
