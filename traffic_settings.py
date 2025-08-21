@@ -1,5 +1,7 @@
 # traffic_settings.py
+import os
 import json
+import datetime
 from urllib.parse import urljoin
 
 class TrafficSettingsManager:
@@ -41,6 +43,10 @@ class TrafficSettingsManager:
             print("Не выбран тенант")
             return False
         
+        # Создаем бекап перед изменением
+        if not self._create_backup():
+            print("Предупреждение: не удалось создать бекап перед изменением")
+        
         url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/traffic_settings")
         
         response = self.make_request("PATCH", url, json=settings_data)
@@ -52,6 +58,30 @@ class TrafficSettingsManager:
             return True
         else:
             print(f"Ошибка при обновлении параметров traffic_settings. Код: {response.status_code}, Ответ: {response.text}")
+            return False
+
+    def _create_backup(self):
+        """Создает бекап текущих настроек"""
+        current_settings = self.get_traffic_settings()
+        if not current_settings:
+            return False
+        
+        # Создаем директорию для бекапов
+        backup_dir = os.path.join("traffic_settings", self.auth_manager.tenant_id)
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Формируем имя файла с датой и временем
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        filename = f"{current_time}-traffic_settings.json"
+        filepath = os.path.join(backup_dir, filename)
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(current_settings, f, ensure_ascii=False, indent=2)
+            print(f"Бекап настроек сохранен в файл: {filepath}")
+            return True
+        except Exception as e:
+            print(f"Ошибка при сохранении бекапа: {e}")
             return False
 
     def _show_current_settings(self, settings):
@@ -246,11 +276,11 @@ class TrafficSettingsManager:
         return current_settings
 
     def manage_traffic_settings(self):
-        """Интерактивное управление настройками трафика"""
+        """Управление настройками traffic_settings"""
         current_settings = self.get_traffic_settings() or {}
         
         while True:
-            print("\nУправление настройками трафика:")
+            print("\nУправление настройками traffic_settings:")
             print("1. NGINX: Настройки загрузки файлов")
             print("2. Envoy Proxy: Sticky Session")
             print("3. Envoy Core: Настройки TLS")

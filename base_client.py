@@ -2,6 +2,10 @@
 import json
 import requests
 from urllib.parse import urljoin
+import urllib3
+
+# Отключаем предупреждения о неверифицированном SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class BaseAPIClient:
     def __init__(self, auth_manager, debug=False):

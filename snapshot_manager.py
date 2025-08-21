@@ -172,3 +172,7 @@ class SnapshotManager:
             
             else:
                 print("Некорректный выбор. Попробуйте снова.")
+
+    def get_snapshots_from_cli(self):
+        """Получает конфигурации со всех тенантов (для вызова из CLI)"""
+        return self.get_all_tenants_snapshots()

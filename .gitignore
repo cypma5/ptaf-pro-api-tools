@@ -2,3 +2,4 @@ pycache/
 *.pyc
 __pycache__
 snapshot
+traffic_settings

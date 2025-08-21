@@ -48,7 +48,7 @@ class PTAFClient:
         return self.tenant_manager.select_tenant_interactive()
 
     def manage_traffic_settings(self):
-        """Управление настройками трафика"""
+        """Управление настройками traffic_settings"""
         return self.traffic_settings_manager.manage_traffic_settings()
 
     def export_rules(self, export_dir="exported_rules"):
@@ -74,6 +74,10 @@ class PTAFClient:
     def manage_snapshots(self):
         """Управление получением конфигураций"""
         return self.snapshot_manager.manage_snapshots()
+
+    def get_snapshots_from_cli(self):
+        """Получает конфигурации со всех тенантов (для CLI)"""
+        return self.snapshot_manager.get_snapshots_from_cli()
 
     def print_failed_files(self):
         """Выводит список проблемных файлов"""
@@ -103,7 +107,7 @@ def main():
     parser.add_argument(
         "--traffic-settings",
         action="store_true",
-        help="Управление настройками трафика"
+        help="Управление настройками traffic_settings"
     )
     parser.add_argument(
         "--replace-actions",
@@ -113,7 +117,7 @@ def main():
     parser.add_argument(
         "--snapshot",
         action="store_true",
-        help="Получение конфигураций тенантов"
+        help="Получить конфигурации со всех доступных тенантов"
     )
     parser.add_argument(
         "--config",
@@ -143,7 +147,7 @@ def main():
                 print("2. Экспорт правил")
                 print("3. Удалить все пользовательские правила")
                 print("4. Управление шаблонами политик")
-                print("5. Управление настройками трафика")
+                print("5. Управление настройками traffic_settings")
                 print("6. Замена действий в шаблоне политики")
                 print("7. Получение конфигураций тенантов")
                 print("8. Выход")
@@ -235,7 +239,8 @@ def main():
                 client.manage_actions_replacement()
             
             elif args.snapshot:
-                client.manage_snapshots()
+                # При использовании --snapshot получаем конфигурации со всех тенантов
+                client.get_snapshots_from_cli()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
