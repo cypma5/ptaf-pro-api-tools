@@ -2,8 +2,6 @@
 import os
 import json
 import argparse
-import warnings
-import urllib3
 from auth import AuthManager
 from tenants import TenantManager
 from base_client import BaseAPIClient
@@ -11,14 +9,7 @@ from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
 from policy_templates import PolicyTemplatesManager
 from actions_manager import ActionsManager
-from urllib3.exceptions import InsecureRequestWarning
-
-# Полностью отключаем SSL предупреждения
-warnings.filterwarnings("ignore", category=InsecureRequestWarning)
-warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
+from snapshot_manager import SnapshotManager
 
 class PTAFClient:
     def __init__(self, config_file="ptaf_api_client_config.json", debug=False):
@@ -41,6 +32,7 @@ class PTAFClient:
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
         self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
+        self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
         try:
@@ -79,6 +71,10 @@ class PTAFClient:
         """Управление заменой действий"""
         return self.actions_manager.manage_actions_replacement()
 
+    def manage_snapshots(self):
+        """Управление получением конфигураций"""
+        return self.snapshot_manager.manage_snapshots()
+
     def print_failed_files(self):
         """Выводит список проблемных файлов"""
         return self.rules_manager.print_failed_files()
@@ -115,6 +111,11 @@ def main():
         help="Замена действий в шаблоне политики"
     )
     parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Получение конфигураций тенантов"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -135,7 +136,7 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions, args.snapshot]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
@@ -144,9 +145,10 @@ def main():
                 print("4. Управление шаблонами политик")
                 print("5. Управление настройками трафика")
                 print("6. Замена действий в шаблоне политики")
-                print("7. Выход")
+                print("7. Получение конфигураций тенантов")
+                print("8. Выход")
                 
-                choice = input("\nВыберите действие (1-7): ")
+                choice = input("\nВыберите действие (1-8): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -189,6 +191,9 @@ def main():
                     client.manage_actions_replacement()
                 
                 elif choice == '7':
+                    client.manage_snapshots()
+                
+                elif choice == '8':
                     return
                 
                 else:
@@ -228,6 +233,9 @@ def main():
                     print("Не удалось выбрать тенант")
                     return
                 client.manage_actions_replacement()
+            
+            elif args.snapshot:
+                client.manage_snapshots()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
