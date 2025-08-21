@@ -2,12 +2,23 @@
 import os
 import json
 import argparse
+import warnings
+import urllib3
 from auth import AuthManager
 from tenants import TenantManager
 from base_client import BaseAPIClient
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
 from policy_templates import PolicyTemplatesManager
+from actions_manager import ActionsManager
+from urllib3.exceptions import InsecureRequestWarning
+
+# Полностью отключаем SSL предупреждения
+warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
 
 class PTAFClient:
     def __init__(self, config_file="ptaf_api_client_config.json", debug=False):
@@ -29,6 +40,7 @@ class PTAFClient:
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
         self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
+        self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
         try:
@@ -63,6 +75,10 @@ class PTAFClient:
         """Управление шаблонами политик"""
         return self.policy_templates_manager.manage_policy_templates()
 
+    def manage_actions_replacement(self):
+        """Управление заменой действий"""
+        return self.actions_manager.manage_actions_replacement()
+
     def print_failed_files(self):
         """Выводит список проблемных файлов"""
         return self.rules_manager.print_failed_files()
@@ -94,6 +110,11 @@ def main():
         help="Управление настройками трафика"
     )
     parser.add_argument(
+        "--replace-actions",
+        action="store_true",
+        help="Замена действий в шаблоне политики"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -114,7 +135,7 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
@@ -122,9 +143,10 @@ def main():
                 print("3. Удалить все пользовательские правила")
                 print("4. Управление шаблонами политик")
                 print("5. Управление настройками трафика")
-                print("6. Выход")
+                print("6. Замена действий в шаблоне политики")
+                print("7. Выход")
                 
-                choice = input("\nВыберите действие (1-6): ")
+                choice = input("\nВыберите действие (1-7): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -161,6 +183,12 @@ def main():
                     client.manage_traffic_settings()
                 
                 elif choice == '6':
+                    if not client.select_tenant():
+                        print("Не удалось выбрать тенант")
+                        continue
+                    client.manage_actions_replacement()
+                
+                elif choice == '7':
                     return
                 
                 else:
@@ -194,6 +222,12 @@ def main():
                     print("Не удалось выбрать тенант")
                     return
                 client.manage_traffic_settings()
+            
+            elif args.replace_actions:
+                if not client.select_tenant():
+                    print("Не удалось выбрать тенант")
+                    return
+                client.manage_actions_replacement()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
