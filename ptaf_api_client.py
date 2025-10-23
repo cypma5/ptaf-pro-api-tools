@@ -68,8 +68,12 @@ class PTAFClient:
         return self.policy_templates_manager.manage_policy_templates()
 
     def manage_actions_replacement(self):
-        """Управление заменой действий"""
+        """Управление заменой действий в шаблоне политики"""
         return self.actions_manager.manage_actions_replacement()
+
+    def manage_actions_replacement_policy(self):
+        """Управление заменой действий в политиках веб приложений"""
+        return self.actions_manager.replace_actions_in_policy()
 
     def manage_snapshots(self):
         """Управление получением конфигураций"""
@@ -115,6 +119,11 @@ def main():
         help="Замена действий в шаблоне политики"
     )
     parser.add_argument(
+        "--replace-actions-policy",
+        action="store_true",
+        help="Замена действий в политике веб приложения"
+    )
+    parser.add_argument(
         "--snapshot",
         action="store_true",
         help="Получить конфигурации со всех доступных тенантов"
@@ -140,7 +149,7 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions, args.snapshot]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions, args.replace_actions_policy, args.snapshot]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
@@ -149,10 +158,11 @@ def main():
                 print("4. Управление шаблонами политик")
                 print("5. Управление настройками traffic_settings")
                 print("6. Замена действий в шаблоне политики")
-                print("7. Получение конфигураций тенантов")
-                print("8. Выход")
+                print("7. Замена действий в политике веб приложения")
+                print("8. Получение конфигураций тенантов")
+                print("9. Выход")
                 
-                choice = input("\nВыберите действие (1-8): ")
+                choice = input("\nВыберите действие (1-9): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -195,9 +205,15 @@ def main():
                     client.manage_actions_replacement()
                 
                 elif choice == '7':
-                    client.manage_snapshots()
+                    if not client.select_tenant():
+                        print("Не удалось выбрать тенант")
+                        continue
+                    client.manage_actions_replacement_policy()
                 
                 elif choice == '8':
+                    client.manage_snapshots()
+                
+                elif choice == '9':
                     return
                 
                 else:
@@ -237,6 +253,12 @@ def main():
                     print("Не удалось выбрать тенант")
                     return
                 client.manage_actions_replacement()
+            
+            elif args.replace_actions_policy:
+                if not client.select_tenant():
+                    print("Не удалось выбрать тенант")
+                    return
+                client.manage_actions_replacement_policy()
             
             elif args.snapshot:
                 # При использовании --snapshot получаем конфигурации со всех тенантов
