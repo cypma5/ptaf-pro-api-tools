@@ -67,13 +67,9 @@ class PTAFClient:
         """Управление шаблонами политик"""
         return self.policy_templates_manager.manage_policy_templates()
 
-    def manage_actions_replacement(self):
-        """Управление заменой действий в шаблоне политики"""
-        return self.actions_manager.manage_actions_replacement()
-
-    def manage_actions_replacement_policy(self):
-        """Управление заменой действий в политиках веб приложений"""
-        return self.actions_manager.replace_actions_in_policy()
+    def manage_actions_operations(self):
+        """Управление операциями с действиями (новая логика)"""
+        return self.actions_manager.manage_actions_operations()
 
     def manage_snapshots(self):
         """Управление получением конфигураций"""
@@ -114,14 +110,9 @@ def main():
         help="Управление настройками traffic_settings"
     )
     parser.add_argument(
-        "--replace-actions",
+        "--actions",
         action="store_true",
-        help="Замена действий в шаблоне политики"
-    )
-    parser.add_argument(
-        "--replace-actions-policy",
-        action="store_true",
-        help="Замена действий в политике веб приложения"
+        help="Управление действиями в правилах"
     )
     parser.add_argument(
         "--snapshot",
@@ -149,7 +140,7 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.replace_actions, args.replace_actions_policy, args.snapshot]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
@@ -157,12 +148,11 @@ def main():
                 print("3. Удалить все пользовательские правила")
                 print("4. Управление шаблонами политик")
                 print("5. Управление настройками traffic_settings")
-                print("6. Замена действий в шаблоне политики")
-                print("7. Замена действий в политике веб приложения")
-                print("8. Получение конфигураций тенантов")
-                print("9. Выход")
+                print("6. Управление действиями в правилах")  # Обновленный пункт
+                print("7. Получение конфигураций тенантов")
+                print("8. Выход")
                 
-                choice = input("\nВыберите действие (1-9): ")
+                choice = input("\nВыберите действие (1-8): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -198,22 +188,16 @@ def main():
                         continue
                     client.manage_traffic_settings()
                 
-                elif choice == '6':
+                elif choice == '6':  # Обновленный пункт
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
-                    client.manage_actions_replacement()
+                    client.manage_actions_operations()
                 
                 elif choice == '7':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    client.manage_actions_replacement_policy()
-                
-                elif choice == '8':
                     client.manage_snapshots()
                 
-                elif choice == '9':
+                elif choice == '8':
                     return
                 
                 else:
@@ -248,17 +232,11 @@ def main():
                     return
                 client.manage_traffic_settings()
             
-            elif args.replace_actions:
+            elif args.actions:  # Новый аргумент командной строки
                 if not client.select_tenant():
                     print("Не удалось выбрать тенант")
                     return
-                client.manage_actions_replacement()
-            
-            elif args.replace_actions_policy:
-                if not client.select_tenant():
-                    print("Не удалось выбрать тенант")
-                    return
-                client.manage_actions_replacement_policy()
+                client.manage_actions_operations()
             
             elif args.snapshot:
                 # При использовании --snapshot получаем конфигурации со всех тенантов
