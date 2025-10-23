@@ -68,12 +68,20 @@ class PTAFClient:
         return self.policy_templates_manager.manage_policy_templates()
 
     def manage_actions_operations(self):
-        """Управление операциями с действиями (новая логика)"""
+        """Управление операциями с действиями"""
         return self.actions_manager.manage_actions_operations()
 
     def manage_snapshots(self):
         """Управление получением конфигураций"""
         return self.snapshot_manager.manage_snapshots()
+
+    def manage_restore(self):
+        """Управление восстановлением конфигураций"""
+        return self.snapshot_manager.manage_restore()
+
+    def manage_tenant_transfer(self):
+        """Управление переносом объектов между тенантами"""
+        return self.snapshot_manager.manage_tenant_transfer()
 
     def get_snapshots_from_cli(self):
         """Получает конфигурации со всех тенантов (для CLI)"""
@@ -82,6 +90,26 @@ class PTAFClient:
     def print_failed_files(self):
         """Выводит список проблемных файлов"""
         return self.rules_manager.print_failed_files()
+
+    def manage_dangerous_actions(self):
+        """Управление опасными действиями"""
+        while True:
+            print("\n=== ОПАСНЫЕ ДЕЙСТВИЯ ===")
+            print("ВНИМАНИЕ: Эти операции могут привести к потере данных!")
+            print("1. Удалить все пользовательские правила")
+            print("2. Вернуться в главное меню")
+            
+            choice = input("\nВыберите действие (1-2): ")
+            
+            if choice == '1':
+                if not self.select_tenant():
+                    print("Не удалось выбрать тенант")
+                    continue
+                self.delete_all_user_rules()
+            elif choice == '2':
+                return
+            else:
+                print("Некорректный выбор. Попробуйте снова.")
 
 def main():
     parser = argparse.ArgumentParser(description="PTAF PRO API Client")
@@ -120,6 +148,21 @@ def main():
         help="Получить конфигурации со всех доступных тенантов"
     )
     parser.add_argument(
+        "--restore",
+        action="store_true",
+        help="Восстановление конфигураций тенантов"
+    )
+    parser.add_argument(
+        "--transfer",
+        action="store_true",
+        help="Перенос объектов между тенантами"
+    )
+    parser.add_argument(
+        "--dangerous",
+        action="store_true",
+        help="Опасные действия"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -140,19 +183,21 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot, args.restore, args.transfer, args.dangerous]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
                 print("2. Экспорт правил")
-                print("3. Удалить все пользовательские правила")
-                print("4. Управление шаблонами политик")
-                print("5. Управление настройками traffic_settings")
-                print("6. Управление действиями в правилах")  # Обновленный пункт
-                print("7. Получение конфигураций тенантов")
-                print("8. Выход")
+                print("3. Управление шаблонами политик")
+                print("4. Управление настройками traffic_settings")
+                print("5. Управление действиями в правилах")
+                print("6. Получение конфигураций тенантов")
+                print("7. Восстановление конфигураций тенантов")
+                print("8. Перенос объектов между тенантами")
+                print("9. Опасные действия")
+                print("10. Выход")
                 
-                choice = input("\nВыберите действие (1-8): ")
+                choice = input("\nВыберите действие (1-10): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -174,30 +219,36 @@ def main():
                     client.export_rules(export_dir)
                 
                 elif choice == '3':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    client.delete_all_user_rules()
-                
-                elif choice == '4':
                     client.manage_policy_templates()
                 
-                elif choice == '5':
+                elif choice == '4':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_traffic_settings()
                 
-                elif choice == '6':  # Обновленный пункт
+                elif choice == '5':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_actions_operations()
                 
-                elif choice == '7':
+                elif choice == '6':
                     client.manage_snapshots()
                 
+                elif choice == '7':
+                    if not client.select_tenant():
+                        print("Не удалось выбрать тенант")
+                        continue
+                    client.manage_restore()
+                
                 elif choice == '8':
+                    client.manage_tenant_transfer()
+                
+                elif choice == '9':
+                    client.manage_dangerous_actions()
+                
+                elif choice == '10':
                     return
                 
                 else:
@@ -232,15 +283,26 @@ def main():
                     return
                 client.manage_traffic_settings()
             
-            elif args.actions:  # Новый аргумент командной строки
+            elif args.actions:
                 if not client.select_tenant():
                     print("Не удалось выбрать тенант")
                     return
                 client.manage_actions_operations()
             
             elif args.snapshot:
-                # При использовании --snapshot получаем конфигурации со всех тенантов
                 client.get_snapshots_from_cli()
+            
+            elif args.restore:
+                if not client.select_tenant():
+                    print("Не удалось выбрать тенант")
+                    return
+                client.manage_restore()
+            
+            elif args.transfer:
+                client.manage_tenant_transfer()
+            
+            elif args.dangerous:
+                client.manage_dangerous_actions()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
