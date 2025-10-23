@@ -74,10 +74,11 @@ class ActionsManager:
         except json.JSONDecodeError:
             return None
 
-    def update_rule_actions(self, template_id, rule_id, new_actions):
-        """Обновляет действия в правиле"""
+    def update_rule_actions_only(self, template_id, rule_id, new_actions):
+        """Обновляет только действия в правиле (оптимизированный PATCH)"""
         url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}")
         
+        # Отправляем только поле actions
         update_data = {
             "actions": new_actions
         }
@@ -344,10 +345,11 @@ class ActionsManager:
         except json.JSONDecodeError:
             return None
 
-    def update_policy_system_rule_actions(self, policy_id, rule_id, new_actions):
-        """Обновляет действия в системном правиле политики"""
+    def update_policy_system_rule_actions_only(self, policy_id, rule_id, new_actions):
+        """Обновляет только действия в системном правиле политики (оптимизированный PATCH)"""
         url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/rules/{rule_id}")
         
+        # Отправляем только поле actions
         update_data = {
             "actions": new_actions
         }
@@ -355,10 +357,11 @@ class ActionsManager:
         response = self.make_request("PATCH", url, json=update_data)
         return response
 
-    def update_policy_user_rule_actions(self, policy_id, rule_id, new_actions):
-        """Обновляет действия в пользовательском правиле политики"""
+    def update_policy_user_rule_actions_only(self, policy_id, rule_id, new_actions):
+        """Обновляет только действия в пользовательском правиле политики (оптимизированный PATCH)"""
         url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/user_rules/{rule_id}")
         
+        # Отправляем только поле actions
         update_data = {
             "actions": new_actions
         }
@@ -371,7 +374,7 @@ class ActionsManager:
         rules = self.get_template_rules(template_id)
         if not rules:
             print("Не найдено правил в указанном шаблоне")
-            return False
+            return 0, 0
         
         total_updated = 0
         total_rules = len(rules)
@@ -395,8 +398,8 @@ class ActionsManager:
             # Добавляем действие
             new_actions = current_actions + [syslog_action_id]
             
-            # Обновляем правило
-            response = self.update_rule_actions(template_id, rule_id, new_actions)
+            # Обновляем только действия (оптимизированный PATCH)
+            response = self.update_rule_actions_only(template_id, rule_id, new_actions)
             if response and response.status_code == 200:
                 print(f"Успешно добавлено действие в правило '{rule_name}'")
                 total_updated += 1
@@ -449,11 +452,11 @@ class ActionsManager:
             # Добавляем действие
             new_actions = current_actions + [syslog_action_id]
             
-            # Обновляем правило
+            # Обновляем только действия (оптимизированный PATCH)
             if is_user_rule:
-                response = self.update_policy_user_rule_actions(policy_id, rule_id, new_actions)
+                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
             else:
-                response = self.update_policy_system_rule_actions(policy_id, rule_id, new_actions)
+                response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 
             if response and response.status_code == 200:
                 print(f"Успешно добавлено действие в правило '{rule_name}' ({'пользовательское' if is_user_rule else 'системное'})")
@@ -493,8 +496,8 @@ class ActionsManager:
             # Заменяем действие
             new_actions = [new_action_id if action_id == old_action_id else action_id for action_id in current_actions]
             
-            # Обновляем правило
-            response = self.update_rule_actions(template_id, rule_id, new_actions)
+            # Обновляем только действия (оптимизированный PATCH)
+            response = self.update_rule_actions_only(template_id, rule_id, new_actions)
             if response and response.status_code == 200:
                 print(f"Успешно заменено действие в правиле '{rule_name}'")
                 total_replaced += 1
@@ -547,11 +550,11 @@ class ActionsManager:
             # Заменяем действие
             new_actions = [new_action_id if action_id == old_action_id else action_id for action_id in current_actions]
             
-            # Обновляем правило
+            # Обновляем только действия (оптимизированный PATCH)
             if is_user_rule:
-                response = self.update_policy_user_rule_actions(policy_id, rule_id, new_actions)
+                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
             else:
-                response = self.update_policy_system_rule_actions(policy_id, rule_id, new_actions)
+                response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 
             if response and response.status_code == 200:
                 print(f"Успешно заменено действие в правиле '{rule_name}' ({'пользовательское' if is_user_rule else 'системное'})")
