@@ -29,7 +29,7 @@ cd ptaf-api-client
 }
 ```
 
-# Использование
+# Использование в CLI
 ```
 python3 ptaf_api_client.py [опции]
 

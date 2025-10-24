@@ -31,18 +31,30 @@ class AuthManager:
             "fingerprint": self.fingerprint
         }
         
-        response = make_request_func("POST", url, json=payload)
-        if not response:
-            return False
+        # Используем requests напрямую, чтобы избежать рекурсии
+        try:
+            response = requests.post(
+                url, 
+                json=payload, 
+                verify=self.ssl_verify,
+                headers={
+                    "User-Agent": "PTAF-API-Client/1.0",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                }
+            )
             
-        if response.status_code == 201:
-            tokens = response.json()
-            self.access_token = tokens.get("access_token")
-            self.refresh_token = tokens.get("refresh_token")
-            print("Успешно получены JWT токены")
-            return True
-        else:
-            print(f"Ошибка при получении токенов. Код: {response.status_code}, Ответ: {response.text}")
+            if response.status_code == 201:
+                tokens = response.json()
+                self.access_token = tokens.get("access_token")
+                self.refresh_token = tokens.get("refresh_token")
+                print("Успешно получены JWT токены")
+                return True
+            else:
+                print(f"Ошибка при получении токенов. Код: {response.status_code}, Ответ: {response.text}")
+                return False
+        except Exception as e:
+            print(f"Исключение при получении токенов: {e}")
             return False
 
     def update_jwt_with_tenant(self, make_request_func):
@@ -58,18 +70,30 @@ class AuthManager:
             "fingerprint": self.fingerprint
         }
         
-        response = make_request_func("POST", url, json=payload)
-        if not response:
-            return False
+        # Используем requests напрямую, чтобы избежать рекурсии
+        try:
+            response = requests.post(
+                url, 
+                json=payload, 
+                verify=self.ssl_verify,
+                headers={
+                    "User-Agent": "PTAF-API-Client/1.0",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                }
+            )
             
-        if response.status_code == 201:
-            tokens = response.json()
-            self.access_token = tokens.get("access_token")
-            self.refresh_token = tokens.get("refresh_token")
-            print(f"Успешно обновлены JWT токены для тенанта {self.tenant_id}")
-            return True
-        else:
-            print(f"Ошибка при обновлении токенов. Код: {response.status_code}, Ответ: {response.text}")
+            if response.status_code == 201:
+                tokens = response.json()
+                self.access_token = tokens.get("access_token")
+                self.refresh_token = tokens.get("refresh_token")
+                print(f"Успешно обновлены JWT токены для тенанта {self.tenant_id}")
+                return True
+            else:
+                print(f"Ошибка при обновлении токенов. Код: {response.status_code}, Ответ: {response.text}")
+                return False
+        except Exception as e:
+            print(f"Исключение при обновлении токенов: {e}")
             return False
 
     def get_auth_headers(self):

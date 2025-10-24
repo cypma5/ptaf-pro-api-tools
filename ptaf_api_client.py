@@ -10,6 +10,7 @@ from rules_manager import RulesManager
 from policy_templates import PolicyTemplatesManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
+from roles_manager import RolesManager
 
 class PTAFClient:
     def __init__(self, config_file="ptaf_api_client_config.json", debug=False):
@@ -33,6 +34,7 @@ class PTAFClient:
         self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
+        self.roles_manager = RolesManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
         try:

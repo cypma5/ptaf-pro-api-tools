@@ -587,19 +587,25 @@ class SnapshotManager:
         print(f"Всего бекендов: {total_backends}")
         
         return success_count > 0
-
+    
     def manage_tenant_transfer(self):
         """Управление переносом объектов между тенантами"""
         while True:
             print("\nПеренос объектов между тенантами:")
             print("1. Перенос защищаемых серверов в другой тенант")
-            print("2. Вернуться в главное меню")
+            print("2. Перенос ролей в другой тенант")  # НОВАЯ ОПЦИЯ
+            print("3. Вернуться в главное меню")
             
-            choice = input("\nВыберите действие (1-2): ")
+            choice = input("\nВыберите действие (1-3): ")
             
             if choice == '1':
                 self.copy_backends_to_another_tenant()
             elif choice == '2':
+                # Импортируем RolesManager здесь, чтобы избежать циклического импорта
+                from roles_manager import RolesManager
+                roles_manager = RolesManager(self.auth_manager, self.make_request)
+                roles_manager.copy_roles_to_another_tenant()
+            elif choice == '3':
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
@@ -674,6 +680,10 @@ class SnapshotManager:
             
             else:
                 print("Некорректный выбор. Попробуйте снова.")
+
+
+
+
 
     def manage_restore(self):
         """Управление восстановлением конфигураций"""
