@@ -72,10 +72,14 @@ class BaseAPIClient:
                 # Если получили 401 и это не первая попытка - обновляем токен
                 if response.status_code == 401 and attempt < max_retries:
                     print("Получена 401 ошибка, пытаемся обновить токен...")
-                    if not self.auth_manager.get_jwt_tokens(self.make_request):
+                    if self.auth_manager.get_jwt_tokens(self):
+                        # Обновляем заголовки с новым токеном
+                        auth_headers = self.auth_manager.get_auth_headers()
+                        headers = {**self.headers, **auth_headers}
+                        continue
+                    else:
                         print("Не удалось обновить JWT токены")
                         return None
-                    continue
                 
                 return response
 
