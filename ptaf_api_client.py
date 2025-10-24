@@ -11,6 +11,9 @@ from policy_templates import PolicyTemplatesManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
 from roles_manager import RolesManager
+from backends_manager import BackendsManager
+from backup_manager import BackupManager
+from actions_backup_manager import ActionsBackupManager
 
 class PTAFClient:
     def __init__(self, config_file="ptaf_api_client_config.json", debug=False):
@@ -35,6 +38,9 @@ class PTAFClient:
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
         self.roles_manager = RolesManager(self.auth_manager, self.base_client.make_request)
+        self.backends_manager = BackendsManager(self.auth_manager, self.base_client.make_request)
+        self.backup_manager = BackupManager(self.auth_manager, self.base_client.make_request)
+        self.actions_backup_manager = ActionsBackupManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
         try:
