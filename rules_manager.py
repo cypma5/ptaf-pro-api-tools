@@ -1,6 +1,7 @@
-# rules_manager.py
 import os
 import json
+import shutil
+import datetime
 from urllib.parse import urljoin
 
 class RulesManager:
@@ -10,6 +11,7 @@ class RulesManager:
         self.failed_files = []
         self.success_files = []
         self.exported_files = []
+        self.problem_dir_created = False
 
     def get_policy_template_id(self):
         """Получает ID первого доступного шаблона политики"""
@@ -250,7 +252,63 @@ class RulesManager:
         print(f"\nУдалено {deleted_count} из {len(user_rules)} правил")
         return deleted_count > 0
 
-    def import_single_rule(self, template_id, file_path, selected_action_ids=None, enable_after_import=False):
+    def _create_problem_directory(self, original_dir):
+        """Создает директорию для проблемных файлов"""
+        problem_dir = os.path.join(original_dir, "problem")
+        if not os.path.exists(problem_dir):
+            try:
+                os.makedirs(problem_dir, exist_ok=True)
+                self.problem_dir_created = True
+                print(f"Создана директория для проблемных файлов: {problem_dir}")
+            except Exception as e:
+                print(f"Не удалось создать директорию для проблемных файлов: {e}")
+                return None
+        return problem_dir
+
+    def _save_import_report(self, directory_path, success_count, total_count):
+        """Сохраняет отчет об импорте в файл"""
+        report_file = os.path.join(directory_path, "import_report.txt")
+        try:
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write("ОТЧЕТ ОБ ИМПОРТЕ ПРАВИЛ\n")
+                f.write("=" * 50 + "\n\n")
+                
+                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"Дата и время импорта: {current_time}\n")
+                f.write(f"Тенант ID: {self.auth_manager.tenant_id}\n\n")
+                
+                f.write(f"ИТОГИ:\n")
+                f.write(f"  Успешно импортировано: {success_count}\n")
+                f.write(f"  Не удалось импортировать: {len(self.failed_files)}\n")
+                f.write(f"  Всего файлов: {total_count}\n\n")
+                
+                if self.success_files:
+                    f.write("УСПЕШНО ИМПОРТИРОВАНЫ:\n")
+                    f.write("-" * 30 + "\n")
+                    for i, file_path in enumerate(self.success_files, 1):
+                        f.write(f"{i}. {os.path.basename(file_path)}\n")
+                    f.write("\n")
+                
+                if self.failed_files:
+                    f.write("ПРОБЛЕМНЫЕ ФАЙЛЫ:\n")
+                    f.write("=" * 50 + "\n")
+                    for i, fail in enumerate(self.failed_files, 1):
+                        f.write(f"{i}. {fail['file']}\n")
+                        f.write(f"   Правило: {fail['rule']}\n")
+                        f.write(f"   Причина: {fail['error']}\n")
+                        if fail.get('code') is not None:
+                            f.write(f"   Код ошибки: {fail['code']}\n")
+                        if fail.get('response') is not None:
+                            f.write(f"   Ответ сервера: {fail['response']}\n")
+                        f.write("\n")
+            
+            print(f"Отчет об импорте сохранен в файл: {report_file}")
+            return report_file
+        except Exception as e:
+            print(f"Ошибка при сохранении отчета: {e}")
+            return None
+
+    def import_single_rule(self, template_id, file_path, selected_action_ids=None, enable_after_import=False, problem_dir=None):
         """Импортирует одно правило из файла"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -278,6 +336,10 @@ class RulesManager:
                     'code': None,
                     'response': None
                 })
+                
+                # Перемещаем файл в problem директорию, если она существует
+                if problem_dir:
+                    self._move_to_problem_directory(file_path, problem_dir, error_msg)
                 return False
             
             existing_rules_dict = {rule['name']: rule['id'] for rule in existing_rules if 'name' in rule and 'id' in rule}
@@ -304,6 +366,9 @@ class RulesManager:
                         'code': None,
                         'response': None
                     })
+                    
+                    if problem_dir:
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
                     return False
                     
                 if response.status_code == 200:
@@ -336,6 +401,9 @@ class RulesManager:
                         'code': response.status_code,
                         'response': response.text
                     })
+                    
+                    if problem_dir:
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
                     return False
             else:
                 # Создание нового правила
@@ -350,6 +418,9 @@ class RulesManager:
                         'code': None,
                         'response': None
                     })
+                    
+                    if problem_dir:
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
                     return False
                     
                 if response.status_code == 201:
@@ -397,6 +468,9 @@ class RulesManager:
                         'code': response.status_code,
                         'response': response.text
                     })
+                    
+                    if problem_dir:
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
                     return False
         
         except json.JSONDecodeError as e:
@@ -409,6 +483,9 @@ class RulesManager:
                 'code': None,
                 'response': None
             })
+            
+            if problem_dir:
+                self._move_to_problem_directory(file_path, problem_dir, error_msg)
             return False
         except Exception as e:
             error_msg = f"Неожиданная ошибка: {str(e)}"
@@ -420,13 +497,122 @@ class RulesManager:
                 'code': None,
                 'response': None
             })
+            
+            if problem_dir:
+                self._move_to_problem_directory(file_path, problem_dir, error_msg)
             return False
+
+    def _move_to_problem_directory(self, file_path, problem_dir, error_reason="", error_code=None, server_response=None):
+        """Перемещает файл в problem директорию и создает файл с подробным описанием ошибки"""
+        try:
+            filename = os.path.basename(file_path)
+            new_path = os.path.join(problem_dir, filename)
+            
+            # Если файл уже существует в problem директории, добавляем суффикс
+            counter = 1
+            base_name, ext = os.path.splitext(filename)
+            while os.path.exists(new_path):
+                new_filename = f"{base_name}_{counter}{ext}"
+                new_path = os.path.join(problem_dir, new_filename)
+                counter += 1
+            
+            # Перемещаем исходный файл
+            shutil.move(file_path, new_path)
+            print(f"Файл перемещен в проблемную директорию: {new_path}")
+            
+            # Создаем файл с подробным описанием ошибки
+            error_filename = f"{os.path.splitext(new_path)[0]}_error.txt"
+            with open(error_filename, 'w', encoding='utf-8') as f:
+                f.write("=" * 60 + "\n")
+                f.write("ОШИБКА ПРИ ИМПОРТЕ ПРАВИЛА\n")
+                f.write("=" * 60 + "\n\n")
+                
+                f.write(f"ФАЙЛ: {filename}\n")
+                
+                # Читаем имя правила из исходного файла
+                try:
+                    with open(new_path, 'r', encoding='utf-8') as rule_file:
+                        rule_data = json.load(rule_file)
+                        rule_name = rule_data.get('name', 'Не указано')
+                        f.write(f"ИМЯ ПРАВИЛА: {rule_name}\n")
+                except:
+                    f.write(f"ИМЯ ПРАВИЛА: Не удалось прочитать из файла\n")
+                
+                f.write(f"ВРЕМЯ ОШИБКИ: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("ДЕТАЛИ ОШИБКИ:\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"ПРИЧИНА: {error_reason}\n")
+                
+                if error_code is not None:
+                    f.write(f"КОД ОШИБКИ: {error_code}\n")
+                
+                if server_response:
+                    f.write("\nОТВЕТ СЕРВЕРА:\n")
+                    f.write("-" * 40 + "\n")
+                    
+                    # Пытаемся красиво отформатировать JSON ответ
+                    try:
+                        response_json = json.loads(server_response)
+                        formatted_response = json.dumps(response_json, indent=2, ensure_ascii=False)
+                        f.write(formatted_response + "\n")
+                    except:
+                        f.write(server_response + "\n")
+                
+                # Добавляем информацию о возможных причинах ошибки
+                f.write("\n\nВОЗМОЖНЫЕ ПРИЧИНЫ:\n")
+                f.write("-" * 40 + "\n")
+                
+                if error_code == 422:
+                    f.write("Ошибка 422 (Unprocessable Entity) обычно означает:\n")
+                    f.write("1. Синтаксическая ошибка в коде правила\n")
+                    f.write("2. Некорректный формат данных в конфигурации\n")
+                    f.write("3. Несоответствие схеме валидации API\n")
+                    f.write("4. Проблемы с парсингом кода правила\n\n")
+                    
+                    if server_response and "UnparseError" in server_response:
+                        f.write("Обнаружена ошибка UnparseError - проблемы с синтаксисом кода:\n")
+                        f.write("• Проверьте корректность синтаксиса JavaScript/TypeScript\n")
+                        f.write("• Убедитесь в правильности закрытия скобок и кавычек\n")
+                        f.write("• Проверьте отсутствие недопустимых символов\n")
+                
+                elif error_code == 400:
+                    f.write("Ошибка 400 (Bad Request) обычно означает:\n")
+                    f.write("1. Неверный формат запроса\n")
+                    f.write("2. Отсутствуют обязательные поля\n")
+                    f.write("3. Некорректные типы данных\n")
+                
+                elif error_code == 401:
+                    f.write("Ошибка 401 (Unauthorized) - проблема с авторизацией\n")
+                    f.write("• Проверьте актуальность токена\n")
+                    f.write("• Убедитесь в правильности выбранного тенанта\n")
+                
+                elif error_code == 403:
+                    f.write("Ошибка 403 (Forbidden) - недостаточно прав\n")
+                    f.write("• Проверьте разрешения пользователя\n")
+                
+                f.write("\n" + "=" * 60 + "\n")
+            
+            print(f"Создан файл с описанием ошибки: {error_filename}")
+            return new_path
+            
+        except Exception as e:
+            print(f"Не удалось переместить файл в проблемную директорию: {e}")
+            return None
 
     def import_rules(self, directory_path):
         """Импортирует правила из указанной директории"""
         if not os.path.isdir(directory_path):
             print(f"Директория не найдена: {directory_path}")
             return False
+        
+        # Сбрасываем списки файлов перед новым импортом
+        self.failed_files = []
+        self.success_files = []
+        self.problem_dir_created = False
+        
+        # Создаем директорию для проблемных файлов
+        problem_dir = self._create_problem_directory(directory_path)
         
         # Получаем ID шаблона политики
         template_id = self.get_policy_template_id()
@@ -509,7 +695,7 @@ class RulesManager:
                 success_count = 0
                 for filename in json_files:
                     file_path = os.path.abspath(os.path.join(directory_path, filename))
-                    if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules):
+                    if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules, problem_dir):
                         success_count += 1
                 
                 # Выводим итоговую статистику
@@ -521,6 +707,10 @@ class RulesManager:
                 print(f"Не удалось обработать: {fail_count}")
                 print(f"Всего файлов: {total_count}")
                 
+                # Сохраняем отчет об импорте
+                self._save_import_report(directory_path, success_count, total_count)
+                
+                # Выводим список проблемных файлов
                 self.print_failed_files()
                 return success_count > 0
             
@@ -540,7 +730,7 @@ class RulesManager:
                     for i in valid_indices:
                         filename = json_files[i]
                         file_path = os.path.abspath(os.path.join(directory_path, filename))
-                        if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules):
+                        if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules, problem_dir):
                             success_count += 1
                     
                     # Выводим итоговую статистику
@@ -552,6 +742,9 @@ class RulesManager:
                     print(f"Успешно обработано: {success_count}")
                     print(f"Не удалось обработать: {fail_count}")
                     print(f"Всего выбрано файлов: {total_count}")
+                    
+                    # Сохраняем отчет об импорте
+                    self._save_import_report(directory_path, success_count, total_count)
                     
                     self.print_failed_files()
                     return success_count > 0
