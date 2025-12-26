@@ -339,7 +339,7 @@ class RulesManager:
                 
                 # Перемещаем файл в problem директорию, если она существует
                 if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                    self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                 return False
             
             existing_rules_dict = {rule['name']: rule['id'] for rule in existing_rules if 'name' in rule and 'id' in rule}
@@ -368,7 +368,7 @@ class RulesManager:
                     })
                     
                     if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
                     
                 if response.status_code == 200:
@@ -403,7 +403,7 @@ class RulesManager:
                     })
                     
                     if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text)
                     return False
             else:
                 # Создание нового правила
@@ -420,7 +420,7 @@ class RulesManager:
                     })
                     
                     if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
                     
                 if response.status_code == 201:
@@ -470,7 +470,7 @@ class RulesManager:
                     })
                     
                     if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text)
                     return False
         
         except json.JSONDecodeError as e:
@@ -485,7 +485,7 @@ class RulesManager:
             })
             
             if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
         except Exception as e:
             error_msg = f"Неожиданная ошибка: {str(e)}"
@@ -499,11 +499,11 @@ class RulesManager:
             })
             
             if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg)
+                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
 
-    def _move_to_problem_directory(self, file_path, problem_dir, error_reason="", error_code=None, server_response=None):
-        """Перемещает файл в problem директорию и создает файл с подробным описанием ошибки"""
+    def _move_to_problem_directory(self, file_path, problem_dir, error_reason="", server_response=""):
+        """Перемещает файл в problem директорию"""
         try:
             filename = os.path.basename(file_path)
             new_path = os.path.join(problem_dir, filename)
@@ -516,86 +516,19 @@ class RulesManager:
                 new_path = os.path.join(problem_dir, new_filename)
                 counter += 1
             
-            # Перемещаем исходный файл
             shutil.move(file_path, new_path)
             print(f"Файл перемещен в проблемную директорию: {new_path}")
             
-            # Создаем файл с подробным описанием ошибки
-            error_filename = f"{os.path.splitext(new_path)[0]}_error.txt"
-            with open(error_filename, 'w', encoding='utf-8') as f:
-                f.write("=" * 60 + "\n")
-                f.write("ОШИБКА ПРИ ИМПОРТЕ ПРАВИЛА\n")
-                f.write("=" * 60 + "\n\n")
-                
-                f.write(f"ФАЙЛ: {filename}\n")
-                
-                # Читаем имя правила из исходного файла
-                try:
-                    with open(new_path, 'r', encoding='utf-8') as rule_file:
-                        rule_data = json.load(rule_file)
-                        rule_name = rule_data.get('name', 'Не указано')
-                        f.write(f"ИМЯ ПРАВИЛА: {rule_name}\n")
-                except:
-                    f.write(f"ИМЯ ПРАВИЛА: Не удалось прочитать из файла\n")
-                
-                f.write(f"ВРЕМЯ ОШИБКИ: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                
-                f.write("ДЕТАЛИ ОШИБКИ:\n")
-                f.write("-" * 40 + "\n")
-                f.write(f"ПРИЧИНА: {error_reason}\n")
-                
-                if error_code is not None:
-                    f.write(f"КОД ОШИБКИ: {error_code}\n")
-                
+            # Создаем файл с описанием ошибки
+            error_file = f"{os.path.splitext(new_path)[0]}_error.txt"
+            with open(error_file, 'w', encoding='utf-8') as f:
+                f.write(f"Файл: {filename}\n")
+                f.write(f"Ошибка: {error_reason}\n")
                 if server_response:
-                    f.write("\nОТВЕТ СЕРВЕРА:\n")
-                    f.write("-" * 40 + "\n")
-                    
-                    # Пытаемся красиво отформатировать JSON ответ
-                    try:
-                        response_json = json.loads(server_response)
-                        formatted_response = json.dumps(response_json, indent=2, ensure_ascii=False)
-                        f.write(formatted_response + "\n")
-                    except:
-                        f.write(server_response + "\n")
-                
-                # Добавляем информацию о возможных причинах ошибки
-                f.write("\n\nВОЗМОЖНЫЕ ПРИЧИНЫ:\n")
-                f.write("-" * 40 + "\n")
-                
-                if error_code == 422:
-                    f.write("Ошибка 422 (Unprocessable Entity) обычно означает:\n")
-                    f.write("1. Синтаксическая ошибка в коде правила\n")
-                    f.write("2. Некорректный формат данных в конфигурации\n")
-                    f.write("3. Несоответствие схеме валидации API\n")
-                    f.write("4. Проблемы с парсингом кода правила\n\n")
-                    
-                    if server_response and "UnparseError" in server_response:
-                        f.write("Обнаружена ошибка UnparseError - проблемы с синтаксисом кода:\n")
-                        f.write("• Проверьте корректность синтаксиса JavaScript/TypeScript\n")
-                        f.write("• Убедитесь в правильности закрытия скобок и кавычек\n")
-                        f.write("• Проверьте отсутствие недопустимых символов\n")
-                
-                elif error_code == 400:
-                    f.write("Ошибка 400 (Bad Request) обычно означает:\n")
-                    f.write("1. Неверный формат запроса\n")
-                    f.write("2. Отсутствуют обязательные поля\n")
-                    f.write("3. Некорректные типы данных\n")
-                
-                elif error_code == 401:
-                    f.write("Ошибка 401 (Unauthorized) - проблема с авторизацией\n")
-                    f.write("• Проверьте актуальность токена\n")
-                    f.write("• Убедитесь в правильности выбранного тенанта\n")
-                
-                elif error_code == 403:
-                    f.write("Ошибка 403 (Forbidden) - недостаточно прав\n")
-                    f.write("• Проверьте разрешения пользователя\n")
-                
-                f.write("\n" + "=" * 60 + "\n")
+                    f.write(f"Ответ сервера: {server_response}\n")
+                f.write(f"Время: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             
-            print(f"Создан файл с описанием ошибки: {error_filename}")
             return new_path
-            
         except Exception as e:
             print(f"Не удалось переместить файл в проблемную директорию: {e}")
             return None

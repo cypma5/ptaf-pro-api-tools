@@ -1,9 +1,9 @@
-# ptaf_api_client.py
 import os
 import json
 import argparse
 from auth import AuthManager
 from tenants import TenantManager
+from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
@@ -32,6 +32,7 @@ class PTAFClient:
         
         self.base_client = BaseAPIClient(self.auth_manager, debug)
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
+        self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
         self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
@@ -119,6 +120,10 @@ class PTAFClient:
             else:
                 print("Некорректный выбор. Попробуйте снова.")
 
+    def manage_tenants(self):
+        """Расширенное управление тенантами"""
+        return self.tenant_extended_manager.manage_tenants_extended()
+
 def main():
     parser = argparse.ArgumentParser(description="PTAF PRO API Client")
     parser.add_argument(
@@ -171,6 +176,11 @@ def main():
         help="Опасные действия"
     )
     parser.add_argument(
+        "--tenants",
+        action="store_true",
+        help="Работа с тенантами"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -191,7 +201,7 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot, args.restore, args.transfer, args.dangerous]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot, args.restore, args.transfer, args.dangerous, args.tenants]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
@@ -203,9 +213,10 @@ def main():
                 print("7. Восстановление конфигураций тенантов")
                 print("8. Перенос объектов между тенантами")
                 print("9. Опасные действия")
-                print("10. Выход")
+                print("10. Работа с тенантами")
+                print("11. Выход")
                 
-                choice = input("\nВыберите действие (1-10): ")
+                choice = input("\nВыберите действие (1-11): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -257,6 +268,9 @@ def main():
                     client.manage_dangerous_actions()
                 
                 elif choice == '10':
+                    client.manage_tenants()
+                
+                elif choice == '11':
                     return
                 
                 else:
@@ -311,6 +325,9 @@ def main():
             
             elif args.dangerous:
                 client.manage_dangerous_actions()
+            
+            elif args.tenants:
+                client.manage_tenants()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
