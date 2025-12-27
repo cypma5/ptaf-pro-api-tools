@@ -12,6 +12,8 @@ class RulesManager:
         self.success_files = []
         self.exported_files = []
         self.problem_dir_created = False
+        self.retry_count = 0
+        self.max_retries = 3
 
     def get_policy_template_id(self):
         """Получает ID первого доступного шаблона политики"""
@@ -308,6 +310,43 @@ class RulesManager:
             print(f"Ошибка при сохранении отчета: {e}")
             return None
 
+    def _check_and_reauth(self, response, template_id, rule_name):
+        """Проверяет ответ на ошибку 404 с reference_not_exist и переаутентифицируется"""
+        if response and response.status_code == 404:
+            try:
+                error_data = response.json()
+                if 'errors' in error_data and 'error_codes' in error_data['errors']:
+                    if 'reference_not_exist' in error_data['errors']['error_codes']:
+                        print(f"\n⚠️ Обнаружена ошибка reference_not_exist для правила '{rule_name}'")
+                        print("Пробуем переаутентифицироваться в том же тенанте...")
+                        
+                        # Сохраняем текущий тенант
+                        current_tenant_id = self.auth_manager.tenant_id
+                        
+                        # Получаем новые токены
+                        if self.auth_manager.get_jwt_tokens(self.make_request):
+                            print("✅ Успешно переаутентифицировались")
+                            
+                            # Обновляем токен для текущего тенанта
+                            if current_tenant_id:
+                                self.auth_manager.tenant_id = current_tenant_id
+                                if self.auth_manager.update_jwt_with_tenant(self.make_request):
+                                    print(f"✅ Токен обновлен для тенанта {current_tenant_id}")
+                                    return True
+                                else:
+                                    print("❌ Не удалось обновить токен для тенанта")
+                                    return False
+                            else:
+                                print("⚠️ Не указан tenant_id, пропускаем обновление токена")
+                                return True
+                        else:
+                            print("❌ Не удалось переаутентифицироваться")
+                            return False
+            except json.JSONDecodeError:
+                pass
+        
+        return False
+
     def import_single_rule(self, template_id, file_path, selected_action_ids=None, enable_after_import=False, problem_dir=None):
         """Импортирует одно правило из файла"""
         try:
@@ -371,8 +410,27 @@ class RulesManager:
                         self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
                     
+                # Проверяем на ошибку 404 с reference_not_exist
+                if self._check_and_reauth(response, template_id, rule_name):
+                    # Пробуем снова после переаутентификации
+                    response = self.update_rule(template_id, rule_id, update_data)
+                    if response is None:
+                        error_msg = "Не удалось выполнить запрос на обновление после переаутентификации"
+                        print(error_msg)
+                        self.failed_files.append({
+                            'file': file_path,
+                            'rule': rule_name,
+                            'error': error_msg,
+                            'code': None,
+                            'response': None
+                        })
+                        
+                        if problem_dir:
+                            self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
+                        return False
+                
                 if response.status_code == 200:
-                    print(f"Правило '{rule_name}' успешно обновлено")
+                    print(f"✅ Правило '{rule_name}' успешно обновлено")
                     self.success_files.append(file_path)
                     
                     if enable_after_import:
@@ -422,9 +480,28 @@ class RulesManager:
                     if problem_dir:
                         self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
+                
+                # Проверяем на ошибку 404 с reference_not_exist
+                if self._check_and_reauth(response, template_id, rule_name):
+                    # Пробуем снова после переаутентификации
+                    response = self.create_rule(template_id, rule_data)
+                    if response is None:
+                        error_msg = "Не удалось выполнить запрос на создание после переаутентификации"
+                        print(error_msg)
+                        self.failed_files.append({
+                            'file': file_path,
+                            'rule': rule_name,
+                            'error': error_msg,
+                            'code': None,
+                            'response': None
+                        })
+                        
+                        if problem_dir:
+                            self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
+                        return False
                     
                 if response.status_code == 201:
-                    print(f"Правило '{rule_name}' успешно создано")
+                    print(f"✅ Правило '{rule_name}' успешно создано")
                     self.success_files.append(file_path)
                     
                     try:
@@ -626,7 +703,8 @@ class RulesManager:
             if choice == '1':
                 # Импорт всех файлов
                 success_count = 0
-                for filename in json_files:
+                for i, filename in enumerate(json_files, 1):
+                    print(f"\n[{i}/{len(json_files)}] ", end="")
                     file_path = os.path.abspath(os.path.join(directory_path, filename))
                     if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules, problem_dir):
                         success_count += 1
@@ -660,8 +738,9 @@ class RulesManager:
                         continue
                     
                     success_count = 0
-                    for i in valid_indices:
-                        filename = json_files[i]
+                    for i, index in enumerate(valid_indices, 1):
+                        print(f"\n[{i}/{len(valid_indices)}] ", end="")
+                        filename = json_files[index]
                         file_path = os.path.abspath(os.path.join(directory_path, filename))
                         if self.import_single_rule(template_id, file_path, selected_action_ids, enable_rules, problem_dir):
                             success_count += 1
