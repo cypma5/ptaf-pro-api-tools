@@ -8,6 +8,7 @@ from base_client import BaseAPIClient
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
 from policy_templates import PolicyTemplatesManager
+from policy_template_manager import PolicyTemplateManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
 from roles_manager import RolesManager
@@ -36,6 +37,7 @@ class PTAFClient:
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
         self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
+        self.policy_template_manager = PolicyTemplateManager(self.auth_manager, self.base_client.make_request)
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
         self.roles_manager = RolesManager(self.auth_manager, self.base_client.make_request)
@@ -123,6 +125,9 @@ class PTAFClient:
     def manage_tenants(self):
         """Расширенное управление тенантами"""
         return self.tenant_extended_manager.manage_tenants_extended()
+    def manage_policy_templates_extended(self):
+        """Расширенное управление шаблонами политик"""
+        return self.policy_template_manager.manage_policy_templates_extended()
 
 def main():
     parser = argparse.ArgumentParser(description="PTAF PRO API Client")
@@ -181,6 +186,11 @@ def main():
         help="Работа с тенантами"
     )
     parser.add_argument(
+        "--policy-template",
+        action="store_true",
+        help="Расширенное управление шаблонами политик"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -201,22 +211,25 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, args.actions, args.snapshot, args.restore, args.transfer, args.dangerous, args.tenants]):
+        if not any([args.source, args.export, args.delete_all, args.policy, args.traffic_settings, 
+                    args.actions, args.snapshot, args.restore, args.transfer, args.dangerous, 
+                    args.tenants, args.policy_template]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
                 print("2. Экспорт правил")
                 print("3. Управление шаблонами политик")
-                print("4. Управление настройками traffic_settings")
-                print("5. Управление действиями в правилах")
-                print("6. Получение конфигураций тенантов")
-                print("7. Восстановление конфигураций тенантов")
-                print("8. Перенос объектов между тенантами")
-                print("9. Опасные действия")
-                print("10. Работа с тенантами")
-                print("11. Выход")
+                print("4. Расширенное управление шаблонами политик безопасности")
+                print("5. Управление настройками traffic_settings")
+                print("6. Управление действиями в правилах")
+                print("7. Получение конфигураций тенантов")
+                print("8. Восстановление конфигураций тенантов")
+                print("9. Перенос объектов между тенантами")
+                print("10. Опасные действия")
+                print("11. Работа с тенантами")
+                print("12. Выход")
                 
-                choice = input("\nВыберите действие (1-11): ")
+                choice = input("\nВыберите действие (1-12): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -244,33 +257,39 @@ def main():
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
-                    client.manage_traffic_settings()
+                    client.manage_policy_templates_extended()
                 
                 elif choice == '5':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
-                    client.manage_actions_operations()
+                    client.manage_traffic_settings()
                 
                 elif choice == '6':
-                    client.manage_snapshots()
+                    if not client.select_tenant():
+                        print("Не удалось выбрать тенант")
+                        continue
+                    client.manage_actions_operations()
                 
                 elif choice == '7':
+                    client.manage_snapshots()
+                
+                elif choice == '8':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_restore()
                 
-                elif choice == '8':
+                elif choice == '9':
                     client.manage_tenant_transfer()
                 
-                elif choice == '9':
+                elif choice == '10':
                     client.manage_dangerous_actions()
                 
-                elif choice == '10':
+                elif choice == '11':
                     client.manage_tenants()
                 
-                elif choice == '11':
+                elif choice == '12':
                     return
                 
                 else:
@@ -278,7 +297,13 @@ def main():
         
         # Обработка аргументов командной строки
         else:
-            if args.export:
+            if args.policy_template:
+                if not client.select_tenant():
+                    print("Не удалось выбрать тенант")
+                    return
+                client.manage_policy_templates_extended()
+            
+            elif args.export:
                 if not client.select_tenant():
                     print("Не удалось выбрать тенант")
                     return
