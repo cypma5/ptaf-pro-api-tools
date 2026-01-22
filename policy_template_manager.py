@@ -332,9 +332,27 @@ class PolicyTemplateManager:
         
         # Собираем все ID действий из измененных правил
         action_ids = set()
+        # Собираем все ID глобальных списков из правил
+        global_list_ids = set()
+        
         for rule_data in modified_rules_data:
+            # Действия
             if 'actions' in rule_data and rule_data['actions']:
                 action_ids.update(rule_data['actions'])
+            
+            # Глобальные списки из variables
+            if 'variables' in rule_data and rule_data['variables']:
+                variables = rule_data['variables']
+                if 'dynamic_global_lists' in variables:
+                    dgl = variables['dynamic_global_lists']
+                    if 'value' in dgl and isinstance(dgl['value'], list):
+                        global_list_ids.update(dgl['value'])
+            
+            # Глобальные списки из агрегации
+            if 'aggregation' in rule_data and rule_data['aggregation']:
+                global_list_id = rule_data['aggregation'].get('global_list_id')
+                if global_list_id:
+                    global_list_ids.add(global_list_id)
         
         # Получаем связанные действия
         related_actions = []
@@ -345,36 +363,43 @@ class PolicyTemplateManager:
                 related_actions = [action for action in all_actions if action.get('id') in action_ids]
                 print(f"Найдено {len(related_actions)} действий")
         
-        # Собираем все ID списков из настроек агрегации
-        list_ids = set()
-        for rule_data in modified_rules_data:
-            if 'aggregation' in rule_data and rule_data['aggregation']:
-                global_list_id = rule_data['aggregation'].get('global_list_id')
-                if global_list_id:
-                    list_ids.add(global_list_id)
-        
-        # Получаем связанные списки
-        related_lists = []
-        if list_ids:
-            print(f"Получение связанных списков ({len(list_ids)})...")
-            all_lists = self.get_available_lists()
+        # Получаем связанные глобальные списки
+        related_global_lists = []
+        if global_list_ids:
+            print(f"Получение связанных глобальных списков ({len(global_list_ids)})...")
+            # Используем новый менеджер глобальных списков
+            from global_lists_manager import GlobalListsManager
+            lists_manager = GlobalListsManager(self.auth_manager, self.make_request)
+            all_lists = lists_manager.get_global_lists()
+            
             if all_lists:
-                related_lists = [lst for lst in all_lists if lst.get('id') in list_ids]
-                print(f"Найдено {len(related_lists)} списков")
+                # Фильтруем только списки из нашего набора ID
+                filtered_lists = [lst for lst in all_lists if lst.get('id') in global_list_ids]
+                
+                # Получаем полные детали для каждого списка
+                for lst in filtered_lists:
+                    list_id = lst.get('id')
+                    list_details = lists_manager.get_global_list_details(list_id)
+                    if list_details:
+                        related_global_lists.append(list_details)
+                
+                print(f"Найдено {len(related_global_lists)} глобальных списков")
         
         # Формируем полный экспорт
         export_data = {
             "template": template_details,
-            "modified_rules": modified_rules_data,  # Только измененные правила
+            "modified_rules": modified_rules_data,
             "related_actions": related_actions,
-            "related_lists": related_lists,
+            "related_global_lists": related_global_lists,  # Новое поле вместо related_lists
             "export_info": {
                 "export_time": datetime.datetime.now().isoformat(),
                 "tenant_id": self.auth_manager.tenant_id,
                 "api_path": self.auth_manager.api_path,
                 "base_url": self.auth_manager.base_url,
                 "export_type": "modified_rules_only",
-                "rules_count": len(modified_rules_data)
+                "rules_count": len(modified_rules_data),
+                "actions_count": len(related_actions),
+                "global_lists_count": len(related_global_lists)
             }
         }
         
@@ -397,7 +422,7 @@ class PolicyTemplateManager:
             print(f"📊 Экспортировано:")
             print(f"  - Измененных правил: {len(modified_rules_data)}")
             print(f"  - Связанных действий: {len(related_actions)}")
-            print(f"  - Связанных списков: {len(related_lists)}")
+            print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
             return filepath
         except Exception as e:
             print(f"❌ Ошибка при сохранении шаблона: {e}")
@@ -423,7 +448,7 @@ class PolicyTemplateManager:
         # Используем modified_rules вместо rules
         modified_rules_data = import_data.get('modified_rules', [])
         related_actions = import_data.get('related_actions', [])
-        related_lists = import_data.get('related_lists', [])
+        related_global_lists = import_data.get('related_global_lists', [])  # Новое поле вместо related_lists
         
         # Проверяем тип экспорта
         export_info = import_data.get('export_info', {})
@@ -437,7 +462,7 @@ class PolicyTemplateManager:
         print(f"📊 Данные для импорта:")
         print(f"  - Измененных правил: {len(modified_rules_data)}")
         print(f"  - Связанных действий: {len(related_actions)}")
-        print(f"  - Связанных списков: {len(related_lists)}")
+        print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
         
         # Сохраняем текущий тенант
         original_tenant_id = self.auth_manager.tenant_id
@@ -452,8 +477,47 @@ class PolicyTemplateManager:
                 return False
         
         try:
-            # Шаг 1: Проверяем и создаем связанные действия
-            print("\n1. Проверяем и создаем связанные действия...")
+            # Шаг 1: Импортируем глобальные списки (если есть)
+            print("\n1. Импортируем глобальные списки...")
+            global_list_mapping = {}
+            
+            if related_global_lists:
+                # Создаем временный файл для импорта глобальных списков
+                temp_lists_file = os.path.join(os.path.dirname(file_path), "temp_global_lists.json")
+                try:
+                    lists_export_data = {
+                        "global_lists": related_global_lists,
+                        "export_info": export_info
+                    }
+                    
+                    with open(temp_lists_file, 'w', encoding='utf-8') as f:
+                        json.dump(lists_export_data, f, ensure_ascii=False, indent=2)
+                    
+                    from global_lists_manager import GlobalListsManager
+                    lists_manager = GlobalListsManager(self.auth_manager, self.make_request)
+                    
+                    # Импортируем списки
+                    import_result = lists_manager.import_global_lists(temp_lists_file, target_tenant_id)
+                    
+                    if isinstance(import_result, dict):
+                        global_list_mapping = import_result
+                        print(f"  ✓ Импортировано глобальных списков: {len(global_list_mapping)}")
+                    else:
+                        print("  ⚠️ Не удалось получить маппинг глобальных списков")
+                
+                except Exception as e:
+                    print(f"  ⚠️ Ошибка при импорте глобальных списков: {e}")
+                finally:
+                    # Удаляем временный файл
+                    try:
+                        os.remove(temp_lists_file)
+                    except:
+                        pass
+            else:
+                print("  ℹ️ Нет глобальных списков для импорта")
+            
+            # Шаг 2: Проверяем и создаем связанные действия
+            print("\n2. Проверяем и создаем связанные действия...")
             action_mapping = {}  # Маппинг ID действий из исходного в целевой
             
             for action in related_actions:
@@ -496,33 +560,6 @@ class PolicyTemplateManager:
                         error_msg = response.text if response else "Неизвестная ошибка"
                         print(f"  ✗ Ошибка при создании действия '{action_name}': {error_msg}")
                         # Можно продолжить без этого действия
-            
-            # Шаг 2: Проверяем и создаем связанные списки
-            print("\n2. Проверяем и создаем связанные списки...")
-            list_mapping = {}  # Маппинг ID списков из исходного в целевой
-            
-            for lst in related_lists:
-                original_list_id = lst.get('id')
-                list_name = lst.get('name')
-                list_type = lst.get('type')
-                
-                # Проверяем, существует ли такой список в целевом тенанте
-                existing_lists = self.get_available_lists()
-                existing_list = None
-                
-                if existing_lists:
-                    for existing in existing_lists:
-                        if (existing.get('name') == list_name and 
-                            existing.get('type') == list_type):
-                            existing_list = existing
-                            break
-                
-                if existing_list:
-                    print(f"  ✓ Список '{list_name}' уже существует (ID: {existing_list.get('id')})")
-                    list_mapping[original_list_id] = existing_list.get('id')
-                else:
-                    print(f"  ⚠️ Список '{list_name}' не найден, будет использоваться оригинальный ID")
-                    # Оставляем оригинальный ID, может список уже существует с другим именем
             
             # Шаг 3: Проверяем/создаем шаблон политики
             print("\n3. Проверяем шаблон политики...")
@@ -635,12 +672,14 @@ class PolicyTemplateManager:
                     if 'dynamic_global_lists' in variables_data:
                         dgl = variables_data['dynamic_global_lists']
                         if 'value' in dgl and isinstance(dgl['value'], list):
-                            # Маппим ID списков в value
+                            # Маппим ID глобальных списков в value
                             mapped_values = []
                             for list_id in dgl['value']:
-                                if list_id in list_mapping:
-                                    mapped_values.append(list_mapping[list_id])
+                                if list_id in global_list_mapping:
+                                    mapped_values.append(global_list_mapping[list_id])
                                 else:
+                                    # Если списка нет в маппинге, возможно это системный список
+                                    # Оставляем оригинальный ID
                                     mapped_values.append(list_id)
                             dgl['value'] = mapped_values
                     
@@ -664,8 +703,8 @@ class PolicyTemplateManager:
                         
                         # Обновляем global_list_id с учетом маппинга
                         original_list_id = aggregation_data.get('global_list_id')
-                        if original_list_id and original_list_id in list_mapping:
-                            aggregation_data['global_list_id'] = list_mapping[original_list_id]
+                        if original_list_id and original_list_id in global_list_mapping:
+                            aggregation_data['global_list_id'] = global_list_mapping[original_list_id]
                         
                         print(f"    Обновление настроек агрегации...")
                         agg_response = self.update_rule_aggregation(target_template_id, target_rule_id, aggregation_data)
@@ -688,6 +727,7 @@ class PolicyTemplateManager:
             print(f"  - Не удалось импортировать: {failed_rules}")
             print(f"  - Всего обработано: {len(modified_rules_data)}")
             print(f"  - Создано/использовано действий: {len(action_mapping)}")
+            print(f"  - Создано/использовано глобальных списков: {len(global_list_mapping)}")
             print(f"  - Шаблон: '{template_name}' (ID: {target_template_id})")
             
             return imported_rules > 0
@@ -714,6 +754,8 @@ class PolicyTemplateManager:
             
             # Сначала экспортируем шаблон
             export_dir = "temp_export"
+            os.makedirs(export_dir, exist_ok=True)  # Создаем директорию, если не существует
+            
             export_file = self.export_template(source_template_id, export_dir)
             
             if not export_file:
@@ -726,9 +768,11 @@ class PolicyTemplateManager:
             # Удаляем временный файл
             try:
                 os.remove(export_file)
-                os.rmdir(export_dir)  # Пытаемся удалить пустую директорию
-            except:
-                pass
+                # Пытаемся удалить директорию, если она пуста
+                if os.path.exists(export_dir) and not os.listdir(export_dir):
+                    os.rmdir(export_dir)
+            except Exception as e:
+                print(f"⚠️ Не удалось удалить временные файлы: {e}")
             
             return result
             
