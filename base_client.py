@@ -4,7 +4,6 @@ import requests
 from urllib.parse import urljoin
 import urllib3
 
-# Отключаем предупреждения о неверифицированном SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class BaseAPIClient:
@@ -14,12 +13,7 @@ class BaseAPIClient:
         self.headers = {
             "User-Agent": "PTAF-API-Client/1.0",
             "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Sec-Ch-Ua-Platform": "\"Windows\"",
-            "Accept-Language": "ru-RU,ru;q=0.9",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty"
+            "Content-Type": "application/json"
         }
 
     def _debug_request(self, method, url, **kwargs):
@@ -27,33 +21,24 @@ class BaseAPIClient:
         if not self.debug:
             return
         
-        print("\n=== DEBUG REQUEST ===")
-        print(f"{method} {url}")
-        headers_to_show = self.headers.copy()
-        if 'Authorization' in headers_to_show:
-            headers_to_show['Authorization'] = 'Bearer ***'
-        print("Headers:", json.dumps(headers_to_show, indent=2, ensure_ascii=False))
+        print(f"\n=== {method} {url} ===")
         if 'json' in kwargs:
-            print("Body:", json.dumps(kwargs['json'], indent=2, ensure_ascii=False))
-        print("====================\n")
+            print(f"Body: {json.dumps(kwargs['json'], indent=2, ensure_ascii=False)[:500]}")
 
     def _debug_response(self, response):
         """Выводит отладочную информацию о ответе"""
         if not self.debug:
             return
         
-        print("\n=== DEBUG RESPONSE ===")
         print(f"Status: {response.status_code}")
-        print("Headers:", json.dumps(dict(response.headers), indent=2, ensure_ascii=False))
-        try:
-            print("Body:", json.dumps(response.json(), indent=2, ensure_ascii=False))
-        except ValueError:
-            print("Body:", response.text)
-        print("=====================\n")
+        if response.text:
+            try:
+                print(f"Response: {json.dumps(response.json(), indent=2, ensure_ascii=False)[:500]}")
+            except:
+                print(f"Response: {response.text[:500]}")
 
     def make_request(self, method, url, max_retries=2, **kwargs):
-        """Универсальный метод для выполнения запросов с обработкой 401 ошибки"""
-        # Обновляем заголовки с актуальным токеном
+        """Универсальный метод для выполнения запросов"""
         auth_headers = self.auth_manager.get_auth_headers()
         headers = {**self.headers, **auth_headers}
         
@@ -69,11 +54,10 @@ class BaseAPIClient:
                 )
                 self._debug_response(response)
 
-                # Если получили 401 и это не первая попытка - обновляем токен
+                # Если получили 401 и это не последняя попытка - обновляем токен
                 if response.status_code == 401 and attempt < max_retries:
                     print("Получена 401 ошибка, пытаемся обновить токен...")
-                    if self.auth_manager.get_jwt_tokens(self):
-                        # Обновляем заголовки с новым токеном
+                    if self.auth_manager.get_jwt_tokens(self.make_request):
                         auth_headers = self.auth_manager.get_auth_headers()
                         headers = {**self.headers, **auth_headers}
                         continue
@@ -85,6 +69,9 @@ class BaseAPIClient:
 
             except requests.exceptions.RequestException as e:
                 print(f"Ошибка при выполнении запроса: {e}")
-                return None
+                if attempt < max_retries:
+                    time.sleep(1)
+                else:
+                    return None
         
-        return None  # Все попытки исчерпаны
+        return None

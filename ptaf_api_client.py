@@ -1,4 +1,4 @@
-# ptaf_api_client.py
+# ptaf_api_client.py (обновленный)
 import os
 import json
 import argparse
@@ -8,7 +8,7 @@ from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
-from policy_templates import PolicyTemplatesManager
+# УДАЛЕНО: from policy_templates import PolicyTemplatesManager
 from policy_template_manager import PolicyTemplateManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
@@ -38,7 +38,7 @@ class PTAFClient:
         self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
-        self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
+        # УДАЛЕНО: self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
         self.policy_template_manager = PolicyTemplateManager(self.auth_manager, self.base_client.make_request)
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
@@ -77,9 +77,9 @@ class PTAFClient:
         """Удаляет все пользовательские правила"""
         return self.rules_manager.delete_all_user_rules()
 
-    def manage_policy_templates(self):
-        """Управление шаблонами политик (старая версия)"""
-        return self.policy_templates_manager.manage_policy_templates()
+    # УДАЛЕНО: def manage_policy_templates(self):
+    # УДАЛЕНО:     """Управление шаблонами политик (старая версия)"""
+    # УДАЛЕНО:     return self.policy_templates_manager.manage_policy_templates()
 
     def manage_policy_templates_extended(self):
         """Расширенное управление шаблонами политик и политиками безопасности"""
@@ -170,7 +170,6 @@ class PTAFClient:
                     print("Файл не найден")
                     continue
                 
-                # Спросить, импортировать в текущий или другой тенант
                 print("\nИмпортировать в:")
                 print("1. Текущий тенант")
                 print("2. Другой тенант")
@@ -310,11 +309,11 @@ def main():
         action="store_true",
         help="Удалить все пользовательские правила"
     )
-    parser.add_argument(
-        "--policy",
-        action="store_true",
-        help="Управление шаблонами политик"
-    )
+    # УДАЛЕНО: parser.add_argument(
+    # УДАЛЕНО:     "--policy",
+    # УДАЛЕНО:     action="store_true",
+    # УДАЛЕНО:     help="Управление шаблонами политик (старая версия)"
+    # УДАЛЕНО: )
     parser.add_argument(
         "--policy-template",
         action="store_true",
@@ -381,26 +380,26 @@ def main():
             return
 
         # Если нет аргументов - запускаем интерактивный режим
-        if not any([args.source, args.export, args.delete_all, args.policy, args.policy_template,
+        if not any([args.source, args.export, args.delete_all, args.policy_template,
                     args.traffic_settings, args.actions, args.snapshot, args.restore, 
                     args.transfer, args.dangerous, args.tenants, args.global_lists]):
             while True:
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
                 print("2. Экспорт правил")
-                print("3. Управление шаблонами политик (старая версия)")
-                print("4. Управление шаблонами и политиками безопасности (новая версия)")
-                print("5. Управление настройками traffic_settings")
-                print("6. Управление действиями в правилах")
-                print("7. Получение конфигураций тенантов")
-                print("8. Восстановление конфигураций тенантов")
-                print("9. Перенос объектов между тенантами")
-                print("10. Опасные действия")
-                print("11. Работа с тенантами")
-                print("12. Управление глобальными списками")
-                print("13. Выход")
+                # УДАЛЕНО: print("3. Управление шаблонами политик (старая версия)")
+                print("3. Управление шаблонами и политиками безопасности (новая версия)")
+                print("4. Управление настройками traffic_settings")
+                print("5. Управление действиями в правилах")
+                print("6. Получение конфигураций тенантов")
+                print("7. Восстановление конфигураций тенантов")
+                print("8. Перенос объектов между тенантами")
+                print("9. Опасные действия")
+                print("10. Работа с тенантами")
+                print("11. Управление глобальными списками")
+                print("12. Выход")
                 
-                choice = input("\nВыберите действие (1-13): ")
+                choice = input("\nВыберите действие (1-12): ")
                 
                 if choice == '1':
                     source_dir = input("Введите путь к директории с JSON файлами: ").strip()
@@ -421,52 +420,52 @@ def main():
                         export_dir = "exported_rules"
                     client.export_rules(export_dir)
                 
-                elif choice == '3':
-                    client.manage_policy_templates()
+                # УДАЛЕНО: elif choice == '3':
+                # УДАЛЕНО:     client.manage_policy_templates()
                 
-                elif choice == '4':
+                elif choice == '3':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_policy_templates_extended()
                 
-                elif choice == '5':
+                elif choice == '4':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_traffic_settings()
                 
-                elif choice == '6':
+                elif choice == '5':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_actions_operations()
                 
-                elif choice == '7':
+                elif choice == '6':
                     client.manage_snapshots()
                 
-                elif choice == '8':
+                elif choice == '7':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_restore()
                 
-                elif choice == '9':
+                elif choice == '8':
                     client.manage_tenant_transfer()
                 
-                elif choice == '10':
+                elif choice == '9':
                     client.manage_dangerous_actions()
                 
-                elif choice == '11':
+                elif choice == '10':
                     client.manage_tenants()
                 
-                elif choice == '12':
+                elif choice == '11':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_global_lists()
                 
-                elif choice == '13':
+                elif choice == '12':
                     return
                 
                 else:
@@ -504,8 +503,8 @@ def main():
                     return
                 client.delete_all_user_rules()
             
-            elif args.policy:
-                client.manage_policy_templates()
+            # УДАЛЕНО: elif args.policy:
+            # УДАЛЕНО:     client.manage_policy_templates()
             
             elif args.traffic_settings:
                 if not client.select_tenant():
