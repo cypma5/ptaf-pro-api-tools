@@ -14,7 +14,7 @@ class RulesManager:
         self.problem_dir_created = False
         self.retry_count = 0
         self.max_retries = 3
-        self.current_import_params = None  # Сохраняем параметры импорта для повторной попытки
+        self.current_import_params = None
 
     def get_policy_template_id(self):
         """Получает ID первого доступного шаблона политики"""
@@ -827,3 +827,26 @@ class RulesManager:
             if fail.get('response') is not None:
                 print(f"   Ответ сервера: {fail['response']}")
             print()
+
+    def manage_dangerous_actions(self):
+        """Управление опасными действиями"""
+        while True:
+            print("\n=== ОПАСНЫЕ ДЕЙСТВИЯ ===")
+            print("ВНИМАНИЕ: Эти операции могут привести к потере данных!")
+            print("1. Удалить все пользовательские правила")
+            print("2. Вернуться в главное меню")
+            
+            choice = input("\nВыберите действие (1-2): ")
+            
+            if choice == '1':
+                # Используем TenantManager для выбора тенанта
+                from tenants import TenantManager
+                tenant_manager = TenantManager(self.auth_manager, self.make_request)
+                if not tenant_manager.select_tenant_interactive():
+                    print("Не удалось выбрать тенант")
+                    continue
+                self.delete_all_user_rules()
+            elif choice == '2':
+                return
+            else:
+                print("Некорректный выбор. Попробуйте снова.")

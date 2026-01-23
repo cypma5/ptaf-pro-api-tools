@@ -105,23 +105,7 @@ class PTAFClient:
 
     def manage_dangerous_actions(self):
         """Управление опасными действиями"""
-        while True:
-            print("\n=== ОПАСНЫЕ ДЕЙСТВИЯ ===")
-            print("ВНИМАНИЕ: Эти операции могут привести к потере данных!")
-            print("1. Удалить все пользовательские правила")
-            print("2. Вернуться в главное меню")
-            
-            choice = input("\nВыберите действие (1-2): ")
-            
-            if choice == '1':
-                if not self.select_tenant():
-                    print("Не удалось выбрать тенант")
-                    continue
-                self.delete_all_user_rules()
-            elif choice == '2':
-                return
-            else:
-                print("Некорректный выбор. Попробуйте снова.")
+        return self.rules_manager.manage_dangerous_actions()
 
     def manage_tenants(self):
         """Расширенное управление тенантами"""
