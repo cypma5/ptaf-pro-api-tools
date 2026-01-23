@@ -1,3 +1,4 @@
+# ptaf_api_client.py
 import os
 import json
 import argparse
@@ -77,11 +78,11 @@ class PTAFClient:
         return self.rules_manager.delete_all_user_rules()
 
     def manage_policy_templates(self):
-        """Управление шаблонами политик"""
+        """Управление шаблонами политик (старая версия)"""
         return self.policy_templates_manager.manage_policy_templates()
 
     def manage_policy_templates_extended(self):
-        """Расширенное управление шаблонами политик"""
+        """Расширенное управление шаблонами политик и политиками безопасности"""
         return self.policy_template_manager.manage_policy_templates_extended()
 
     def manage_actions_operations(self):
@@ -317,7 +318,7 @@ def main():
     parser.add_argument(
         "--policy-template",
         action="store_true",
-        help="Расширенное управление шаблонами политик"
+        help="Расширенное управление шаблонами политик и политиками безопасности"
     )
     parser.add_argument(
         "--traffic-settings",
@@ -387,8 +388,8 @@ def main():
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
                 print("2. Экспорт правил")
-                print("3. Управление шаблонами политик")
-                print("4. Расширенное управление шаблонами политик безопасности")
+                print("3. Управление шаблонами политик (старая версия)")
+                print("4. Управление шаблонами и политиками безопасности (новая версия)")
                 print("5. Управление настройками traffic_settings")
                 print("6. Управление действиями в правилах")
                 print("7. Получение конфигураций тенантов")
