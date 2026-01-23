@@ -1,4 +1,4 @@
-# ptaf_api_client.py (обновленный)
+# ptaf_api_client.py (упрощенный)
 import os
 import json
 import argparse
@@ -8,7 +8,6 @@ from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
-# УДАЛЕНО: from policy_templates import PolicyTemplatesManager
 from policy_template_manager import PolicyTemplateManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
@@ -38,7 +37,6 @@ class PTAFClient:
         self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
         self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
-        # УДАЛЕНО: self.policy_templates_manager = PolicyTemplatesManager(self.auth_manager, self.base_client.make_request)
         self.policy_template_manager = PolicyTemplateManager(self.auth_manager, self.base_client.make_request)
         self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
@@ -76,10 +74,6 @@ class PTAFClient:
     def delete_all_user_rules(self):
         """Удаляет все пользовательские правила"""
         return self.rules_manager.delete_all_user_rules()
-
-    # УДАЛЕНО: def manage_policy_templates(self):
-    # УДАЛЕНО:     """Управление шаблонами политик (старая версия)"""
-    # УДАЛЕНО:     return self.policy_templates_manager.manage_policy_templates()
 
     def manage_policy_templates_extended(self):
         """Расширенное управление шаблонами политик и политиками безопасности"""
@@ -135,163 +129,7 @@ class PTAFClient:
 
     def manage_global_lists(self):
         """Управление глобальными списками"""
-        while True:
-            print("\n=== УПРАВЛЕНИЕ ГЛОБАЛЬНЫМИ СПИСКАМИ ===")
-            print("1. Экспортировать пользовательские глобальные списки")
-            print("2. Импортировать глобальные списки из JSON")
-            print("3. Копировать глобальные списки в другой тенант")
-            print("4. Показать список глобальных списков")
-            print("5. Вернуться в главное меню")
-            
-            choice = input("\nВыберите действие (1-5): ")
-            
-            if choice == '1':
-                if not self.auth_manager.tenant_id:
-                    print("Сначала выберите тенант")
-                    continue
-                
-                export_dir = input("Введите путь для экспорта [global_lists_export]: ").strip()
-                if not export_dir:
-                    export_dir = "global_lists_export"
-                
-                print(f"\nЭкспорт глобальных списков...")
-                export_file = self.global_lists_manager.export_global_lists(export_dir)
-                
-                if export_file:
-                    print(f"✅ Глобальные списки успешно экспортированы: {export_file}")
-            
-            elif choice == '2':
-                if not self.auth_manager.tenant_id:
-                    print("Сначала выберите тенант")
-                    continue
-                
-                file_path = input("Введите путь к JSON файлу глобальных списков: ").strip()
-                if not file_path or not os.path.exists(file_path):
-                    print("Файл не найден")
-                    continue
-                
-                print("\nИмпортировать в:")
-                print("1. Текущий тенант")
-                print("2. Другой тенант")
-                
-                import_choice = input("Ваш выбор (1-2): ").strip()
-                
-                target_tenant_id = None
-                if import_choice == '2':
-                    from snapshot_manager import SnapshotManager
-                    snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
-                    tenants = snapshot_manager.get_available_tenants()
-                    
-                    if tenants:
-                        print("\nВыберите целевой тенант:")
-                        for i, tenant in enumerate(tenants, 1):
-                            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-                        
-                        tenant_choice = input("Выберите номер тенанта: ").strip()
-                        try:
-                            index = int(tenant_choice) - 1
-                            if 0 <= index < len(tenants):
-                                target_tenant_id = tenants[index].get('id')
-                        except:
-                            print("Некорректный выбор")
-                            continue
-                
-                print("\nИмпорт глобальных списков...")
-                result = self.global_lists_manager.import_global_lists(file_path, target_tenant_id)
-                
-                if result:
-                    print("✅ Импорт завершен успешно!")
-                else:
-                    print("❌ Импорт не удался")
-            
-            elif choice == '3':
-                if not self.auth_manager.tenant_id:
-                    print("Сначала выберите тенант")
-                    continue
-                
-                from snapshot_manager import SnapshotManager
-                snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
-                tenants = snapshot_manager.get_available_tenants()
-                
-                if not tenants:
-                    print("Не удалось получить список тенантов")
-                    continue
-                
-                # Выбор исходного тенанта
-                print("\nВыберите исходный тенант:")
-                for i, tenant in enumerate(tenants, 1):
-                    print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-                
-                source_choice = input("Выберите номер исходного тенанта: ").strip()
-                try:
-                    source_index = int(source_choice) - 1
-                    if not (0 <= source_index < len(tenants)):
-                        print("Некорректный выбор")
-                        continue
-                    source_tenant_id = tenants[source_index].get('id')
-                except:
-                    print("Некорректный выбор")
-                    continue
-                
-                # Выбор целевого тенанта
-                print("\nВыберите целевой тенант:")
-                for i, tenant in enumerate(tenants, 1):
-                    print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-                
-                target_choice = input("Выберите номер целевого тенанта: ").strip()
-                try:
-                    target_index = int(target_choice) - 1
-                    if not (0 <= target_index < len(tenants)):
-                        print("Некорректный выбор")
-                        continue
-                    target_tenant_id = tenants[target_index].get('id')
-                except:
-                    print("Некорректный выбор")
-                    continue
-                
-                if source_tenant_id == target_tenant_id:
-                    print("Исходный и целевой тенанты совпадают")
-                    continue
-                
-                confirm = input(f"\nВы уверены, что хотите скопировать глобальные списки? (y/n): ").lower()
-                if confirm != 'y':
-                    print("Копирование отменено")
-                    continue
-                
-                print(f"\nКопирование глобальных списков...")
-                result = self.global_lists_manager.copy_global_lists_to_another_tenant(
-                    source_tenant_id, target_tenant_id
-                )
-                
-                if result:
-                    print("✅ Копирование завершено успешно!")
-                else:
-                    print("❌ Копирование не удалось")
-            
-            elif choice == '4':
-                if not self.auth_manager.tenant_id:
-                    print("Сначала выберите тенант")
-                    continue
-                
-                lists = self.global_lists_manager.get_global_lists()
-                if lists:
-                    print("\nГлобальные списки:")
-                    for i, lst in enumerate(lists, 1):
-                        print(f"{i}. {lst.get('name', 'Без названия')}")
-                        print(f"   ID: {lst.get('id')}")
-                        print(f"   Тип: {lst.get('type')}")
-                        print(f"   Системный: {'Да' if lst.get('is_system', True) else 'Нет'}")
-                        print(f"   Размер: {lst.get('size', 0)}")
-                        print(f"   Описание: {lst.get('description', 'Нет описания')}")
-                        print()
-                else:
-                    print("Не найдено глобальных списков")
-            
-            elif choice == '5':
-                return
-            
-            else:
-                print("Некорректный выбор. Попробуйте снова.")
+        return self.global_lists_manager.manage_global_lists()
 
 def main():
     parser = argparse.ArgumentParser(description="PTAF PRO API Client")
@@ -309,11 +147,6 @@ def main():
         action="store_true",
         help="Удалить все пользовательские правила"
     )
-    # УДАЛЕНО: parser.add_argument(
-    # УДАЛЕНО:     "--policy",
-    # УДАЛЕНО:     action="store_true",
-    # УДАЛЕНО:     help="Управление шаблонами политик (старая версия)"
-    # УДАЛЕНО: )
     parser.add_argument(
         "--policy-template",
         action="store_true",
@@ -387,8 +220,7 @@ def main():
                 print("\nГлавное меню:")
                 print("1. Импорт правил")
                 print("2. Экспорт правил")
-                # УДАЛЕНО: print("3. Управление шаблонами политик (старая версия)")
-                print("3. Управление шаблонами и политиками безопасности (новая версия)")
+                print("3. Управление шаблонами и политиками безопасности")
                 print("4. Управление настройками traffic_settings")
                 print("5. Управление действиями в правилах")
                 print("6. Получение конфигураций тенантов")
@@ -419,9 +251,6 @@ def main():
                     if not export_dir:
                         export_dir = "exported_rules"
                     client.export_rules(export_dir)
-                
-                # УДАЛЕНО: elif choice == '3':
-                # УДАЛЕНО:     client.manage_policy_templates()
                 
                 elif choice == '3':
                     if not client.select_tenant():
@@ -502,9 +331,6 @@ def main():
                     print("Не удалось выбрать тенант")
                     return
                 client.delete_all_user_rules()
-            
-            # УДАЛЕНО: elif args.policy:
-            # УДАЛЕНО:     client.manage_policy_templates()
             
             elif args.traffic_settings:
                 if not client.select_tenant():

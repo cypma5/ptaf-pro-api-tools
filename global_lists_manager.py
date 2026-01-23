@@ -1,4 +1,3 @@
-# global_lists_manager.py
 import os
 import json
 import datetime
@@ -296,6 +295,190 @@ class GlobalListsManager:
             if original_tenant_id:
                 self.auth_manager.tenant_id = original_tenant_id
                 self.auth_manager.update_jwt_with_tenant(self.make_request)
+
+
+    def manage_global_lists(self):
+        """Основное меню управления глобальными списками"""
+        while True:
+            print("\n=== УПРАВЛЕНИЕ ГЛОБАЛЬНЫМИ СПИСКАМИ ===")
+            print("1. Экспортировать пользовательские глобальные списки")
+            print("2. Импортировать глобальные списки из JSON")
+            print("3. Копировать глобальные списки в другой тенант")
+            print("4. Показать список глобальных списков")
+            print("5. Вернуться в главное меню")
+            
+            choice = input("\nВыберите действие (1-5): ")
+            
+            if choice == '1':
+                self._export_global_lists_menu()
+            elif choice == '2':
+                self._import_global_lists_menu()
+            elif choice == '3':
+                self._copy_global_lists_menu()
+            elif choice == '4':
+                self._show_global_lists_menu()
+            elif choice == '5':
+                return
+            else:
+                print("Некорректный выбор. Попробуйте снова.")
+
+    def _export_global_lists_menu(self):
+        """Меню экспорта глобальных списков"""
+        if not self.auth_manager.tenant_id:
+            print("Сначала выберите тенант")
+            return
+        
+        export_dir = input("Введите путь для экспорта [global_lists_export]: ").strip()
+        if not export_dir:
+            export_dir = "global_lists_export"
+        
+        print(f"\nЭкспорт глобальных списков...")
+        export_file = self.export_global_lists(export_dir)
+        
+        if export_file:
+            print(f"✅ Глобальные списки успешно экспортированы: {export_file}")
+
+    def _import_global_lists_menu(self):
+        """Меню импорта глобальных списков"""
+        if not self.auth_manager.tenant_id:
+            print("Сначала выберите тенант")
+            return
+        
+        file_path = input("Введите путь к JSON файлу глобальных списков: ").strip()
+        if not file_path or not os.path.exists(file_path):
+            print("Файл не найден")
+            return
+        
+        print("\nИмпортировать в:")
+        print("1. Текущий тенант")
+        print("2. Другой тенант")
+        
+        import_choice = input("Ваш выбор (1-2): ").strip()
+        
+        target_tenant_id = None
+        if import_choice == '2':
+            target_tenant_id = self._select_tenant_interactive("Выберите целевой тенант:")
+            if not target_tenant_id:
+                return
+        
+        print("\nИмпорт глобальных списков...")
+        result = self.import_global_lists(file_path, target_tenant_id)
+        
+        if result:
+            print("✅ Импорт завершен успешно!")
+        else:
+            print("❌ Импорт не удался")
+
+    def _copy_global_lists_menu(self):
+        """Меню копирования глобальных списков"""
+        if not self.auth_manager.tenant_id:
+            print("Сначала выберите тенант")
+            return
+        
+        # Получаем список тенантов
+        from snapshot_manager import SnapshotManager
+        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
+        tenants = snapshot_manager.get_available_tenants()
+        
+        if not tenants:
+            print("Не удалось получить список тенантов")
+            return
+        
+        # Выбор исходного тенанта
+        print("\nВыберите исходный тенант:")
+        source_tenant_id = self._select_tenant_from_list(tenants, "Выберите номер исходного тенанта: ")
+        if not source_tenant_id:
+            return
+        
+        # Выбор целевого тенанта
+        print("\nВыберите целевой тенант:")
+        target_tenant_id = self._select_tenant_from_list(tenants, "Выберите номер целевого тенанта: ")
+        if not target_tenant_id:
+            return
+        
+        if source_tenant_id == target_tenant_id:
+            print("Исходный и целевой тенанты совпадают")
+            return
+        
+        confirm = input(f"\nВы уверены, что хотите скопировать глобальные списки? (y/n): ").lower()
+        if confirm != 'y':
+            print("Копирование отменено")
+            return
+        
+        print(f"\nКопирование глобальных списков...")
+        result = self.copy_global_lists_to_another_tenant(source_tenant_id, target_tenant_id)
+        
+        if result:
+            print("✅ Копирование завершено успешно!")
+        else:
+            print("❌ Копирование не удалось")
+
+    def _show_global_lists_menu(self):
+        """Меню показа списка глобальных списков"""
+        if not self.auth_manager.tenant_id:
+            print("Сначала выберите тенант")
+            return
+        
+        lists = self.get_global_lists()
+        if lists:
+            print("\nГлобальные списки:")
+            for i, lst in enumerate(lists, 1):
+                print(f"{i}. {lst.get('name', 'Без названия')}")
+                print(f"   ID: {lst.get('id')}")
+                print(f"   Тип: {lst.get('type')}")
+                print(f"   Системный: {'Да' if lst.get('is_system', True) else 'Нет'}")
+                print(f"   Размер: {lst.get('size', 0)}")
+                print(f"   Описание: {lst.get('description', 'Нет описания')}")
+                print()
+        else:
+            print("Не найдено глобальных списков")
+
+    def _select_tenant_interactive(self, prompt="Выберите тенант:"):
+        """Интерактивный выбор тенанта"""
+        from snapshot_manager import SnapshotManager
+        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
+        tenants = snapshot_manager.get_available_tenants()
+        
+        if not tenants:
+            print("Не удалось получить список тенантов")
+            return None
+        
+        print(f"\n{prompt}")
+        for i, tenant in enumerate(tenants, 1):
+            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
+        
+        while True:
+            try:
+                choice = input("Выберите номер тенанта (или 'q' для отмены): ").strip()
+                if choice.lower() == 'q':
+                    return None
+                
+                index = int(choice) - 1
+                if 0 <= index < len(tenants):
+                    return tenants[index].get('id')
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
+
+    def _select_tenant_from_list(self, tenants, prompt):
+        """Выбор тенанта из готового списка"""
+        for i, tenant in enumerate(tenants, 1):
+            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
+        
+        while True:
+            try:
+                choice = input(prompt).strip()
+                if choice.lower() == 'q':
+                    return None
+                
+                index = int(choice) - 1
+                if 0 <= index < len(tenants):
+                    return tenants[index].get('id')
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
 
     def copy_global_lists_to_another_tenant(self, source_tenant_id, target_tenant_id):
         """Копирует глобальные списки из одного тенанта в другой"""
