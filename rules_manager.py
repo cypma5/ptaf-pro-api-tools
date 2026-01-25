@@ -1,132 +1,59 @@
+# rules_manager.py (упрощенный с ErrorHandler)
 import os
 import json
 import shutil
 import datetime
-from urllib.parse import urljoin
+from tenants import TenantManager
 
 class RulesManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
+    def __init__(self, api_client):
+        self.api_client = api_client
         self.failed_files = []
         self.success_files = []
         self.exported_files = []
         self.problem_dir_created = False
-        self.retry_count = 0
-        self.max_retries = 3
-        self.current_import_params = None
-
+    
     def get_policy_template_id(self):
         """Получает ID первого доступного шаблона политики"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
-            templates = response.json()
-            
-            if isinstance(templates, dict) and 'items' in templates and len(templates['items']) > 0:
-                return templates['items'][0].get('id')
-            elif isinstance(templates, list) and len(templates) > 0:
-                return templates[0].get('id')
-            else:
-                print("Не найдено доступных шаблонов политик")
-                return None
-                
-        except json.JSONDecodeError as e:
-            print(f"Ошибка декодирования JSON: {e}")
-            print("Полученный ответ:", response.text)
-            return None
-
+        response = self.api_client.get_templates_with_user_rules()
+        templates = self.api_client._parse_response_items(response)
+        if templates and len(templates) > 0:
+            return templates[0].get('id')
+        return None
+    
     def get_existing_rules(self, template_id):
         """Получает список существующих правил для шаблона"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
-            rules = response.json()
-            if isinstance(rules, dict) and 'items' in rules:
-                return rules['items']
-            return []
-        except json.JSONDecodeError:
-            return []
-
+        response = self.api_client.get_user_rules(template_id)
+        return self.api_client._parse_response_items(response)
+    
     def get_rule_details(self, template_id, rule_id):
         """Получает детали конкретного правила"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
+        response = self.api_client.get_user_rule_details(template_id, rule_id)
+        if response and response.status_code == 200:
             return response.json()
-        except json.JSONDecodeError:
-            return None
-
+        return None
+    
     def create_rule(self, template_id, rule_data):
-        """Создает новое правило и возвращает response или None при ошибке"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules")
-        return self.make_request("POST", url, json=rule_data)
-
+        """Создает новое правило"""
+        return self.api_client.create_user_rule(template_id, rule_data)
+    
     def update_rule(self, template_id, rule_id, update_data):
-        """Обновляет существующее правило и возвращает response или None при ошибке"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}")
-        return self.make_request("PATCH", url, json=update_data)
-
+        """Обновляет существующее правило"""
+        return self.api_client.update_user_rule(template_id, rule_id, update_data)
+    
     def enable_rule(self, template_id, rule_id, enable=True):
         """Включает или отключает правило"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}")
-        payload = {"enabled": enable}
-        return self.make_request("PATCH", url, json=payload)
-
+        return self.api_client.enable_user_rule(template_id, rule_id, enable)
+    
     def delete_rule(self, template_id, rule_id):
         """Удаляет правило"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}")
-        return self.make_request("DELETE", url)
-
+        return self.api_client.delete_user_rule(template_id, rule_id)
+    
     def get_available_actions(self):
         """Получает список доступных действий"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/actions")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            actions = response.json()
-            if isinstance(actions, dict) and 'items' in actions:
-                return actions['items']
-            elif isinstance(actions, list):
-                return actions
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(actions)}")
-                return None
-        else:
-            print(f"Ошибка при получении списка действий. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_actions()
+        return self.api_client._parse_response_items(response)
+    
     def export_single_rule(self, template_id, rule, export_dir):
         """Экспортирует одно правило"""
         rule_id = rule.get('id')
@@ -148,21 +75,25 @@ class RulesManager:
         filename = f"{safe_name}.ptafpro"
         filepath = os.path.join(export_dir, filename)
         
+        # Получаем абсолютный путь
+        absolute_filepath = os.path.abspath(filepath)
+        
         # Сохраняем правило в файл
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(rule_details, f, ensure_ascii=False, indent=2)
-            print(f"Правило '{rule_name}' экспортировано в {filepath}")
-            self.exported_files.append(filepath)
+            print(f"Правило '{rule_name}' экспортировано:")
+            print(f"📁 Путь: {absolute_filepath}")
+            self.exported_files.append(absolute_filepath)
             return True
         except Exception as e:
             print(f"Ошибка при сохранении правила '{rule_name}': {e}")
             return False
-
+    
     def export_rules(self, export_dir="exported_rules"):
-        """Экспортирует правила с различными опциями"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
+        """Экспортирует правила"""
+        if not self.api_client.auth_manager.access_token:  # Исправлено
+            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):  # Исправлено
                 return False
 
         # Получаем ID шаблона политики
@@ -196,11 +127,11 @@ class RulesManager:
         
         print(f"\nЭкспортировано {success_count} из {len(user_rules)} правил")
         return success_count > 0
-
+    
     def delete_all_user_rules(self):
         """Удаляет все пользовательские правила из шаблона"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
+        if not self.api_client.auth_manager.access_token:  # Исправлено
+            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):  # Исправлено
                 return False
 
         # Получаем ID шаблона политики
@@ -278,7 +209,7 @@ class RulesManager:
                 
                 current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"Дата и время импорта: {current_time}\n")
-                f.write(f"Тенант ID: {self.auth_manager.tenant_id}\n\n")
+                f.write(f"Тенант ID: {self.api_client.auth_manager.tenant_id}\n\n")  # Исправлено
                 
                 f.write(f"ИТОГИ:\n")
                 f.write(f"  Успешно импортировано: {success_count}\n")
@@ -312,33 +243,16 @@ class RulesManager:
             return None
 
     def _handle_404_error(self, template_id, file_path, rule_name, rule_data, selected_action_ids, enable_after_import, problem_dir):
-        """Обрабатывает ошибку 404 - обновляет токен и повторяет импорт"""
+        """Обрабатывает ошибку 404 через ErrorHandler"""
         print(f"\n⚠️ Обнаружена ошибка 404 для правила '{rule_name}'")
-        print("Обновляем токен для текущего тенанта и повторяем импорт...")
         
-        # Сохраняем текущий тенант
-        current_tenant_id = self.auth_manager.tenant_id
-        
-        # Получаем новые токены
-        print("1. Получаем новые JWT токены...")
-        if not self.auth_manager.get_jwt_tokens(self.make_request):
-            print("❌ Не удалось получить новые JWT токены")
+        # Используем ErrorHandler для обработки 404
+        if not self.api_client.error_handler.handle_404_error():
             return False
         
-        # Обновляем токен для текущего тенанта
-        if current_tenant_id:
-            print(f"2. Обновляем токен для тенанта {current_tenant_id}...")
-            self.auth_manager.tenant_id = current_tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
-                print("❌ Не удалось обновить токен для тенанта")
-                return False
-        else:
-            print("⚠️ Не указан tenant_id, пропускаем обновление токена")
-        
-        print("3. Повторяем импорт правила...")
+        print("Повторяем импорт правила...")
         
         # Повторяем импорт с обновленным токеном
-        # Сначала получаем список существующих правил снова
         existing_rules = self.get_existing_rules(template_id)
         if existing_rules is None:
             print("❌ Не удалось получить список существующих правил после обновления токена")
@@ -386,33 +300,20 @@ class RulesManager:
         if response:
             error_msg = f"Ошибка при повторном импорте правила (код {response.status_code})"
             print(f"❌ {error_msg}: {rule_name}")
-            print(f"Ответ сервера: {response.text}")
             
-            # Проверяем, снова ли это 404 ошибка
-            if response.status_code == 404:
-                print("⚠️ Повторная 404 ошибка. Файл не будет перемещен в problem.")
-                # Не добавляем в failed_files и не перемещаем в problem
-                return False
-            else:
-                # Другие ошибки добавляем в failed_files
-                self.failed_files.append({
-                    'file': file_path,
-                    'rule': rule_name,
-                    'error': error_msg,
-                    'code': response.status_code,
-                    'response': response.text
-                })
-                
-                if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text)
-        else:
-            error_msg = "Не удалось выполнить запрос после обновления токена"
-            print(f"❌ {error_msg}")
-            # Не добавляем в failed_files и не перемещаем в problem для 404 случаев
-            return False
+            self.failed_files.append({
+                'file': file_path,
+                'rule': rule_name,
+                'error': error_msg,
+                'code': response.status_code,
+                'response': response.text[:200] if response.text else ""
+            })
+            
+            if problem_dir:
+                self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "")
         
         return False
-
+    
     def import_single_rule(self, template_id, file_path, selected_action_ids=None, enable_after_import=False, problem_dir=None):
         """Импортирует одно правило из файла"""
         try:
@@ -476,7 +377,7 @@ class RulesManager:
                     
                 # Проверяем на ошибку 404
                 if response.status_code == 404:
-                    # Обрабатываем ошибку 404 - обновляем токен и повторяем
+                    # Обрабатываем ошибку 404
                     return self._handle_404_error(
                         template_id, file_path, rule_name, rule_data, 
                         selected_action_ids, enable_after_import, problem_dir
@@ -490,20 +391,18 @@ class RulesManager:
                         self.enable_rule(template_id, rule_id, True)
                     return True
                 else:
-                    error_msg = f"Ошибка при обновлении правила (код {response.status_code})"
-                    print(f"❌ {error_msg}: {rule_name}")
-                    print(f"Ответ сервера: {response.text}")
-                    
-                    self.failed_files.append({
-                        'file': file_path,
-                        'rule': rule_name,
-                        'error': error_msg,
-                        'code': response.status_code,
-                        'response': response.text
-                    })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text)
+                    # Используем ErrorHandler для обработки других ошибок
+                    if not self.api_client.error_handler.handle_common_error(response, f"Обновление правила '{rule_name}'"):
+                        self.failed_files.append({
+                            'file': file_path,
+                            'rule': rule_name,
+                            'error': f"Ошибка {response.status_code}",
+                            'code': response.status_code,
+                            'response': response.text[:200] if response.text else ""
+                        })
+                        
+                        if problem_dir:
+                            self._move_to_problem_directory(file_path, problem_dir, f"Ошибка {response.status_code}", response.text[:200] if response.text else "")
                     return False
             else:
                 # Создание нового правила
@@ -525,7 +424,7 @@ class RulesManager:
                 
                 # Проверяем на ошибку 404
                 if response.status_code == 404:
-                    # Обрабатываем ошибку 404 - обновляем токен и повторяем
+                    # Обрабатываем ошибку 404
                     return self._handle_404_error(
                         template_id, file_path, rule_name, rule_data,
                         selected_action_ids, enable_after_import, problem_dir
@@ -546,20 +445,18 @@ class RulesManager:
                     
                     return True
                 else:
-                    error_msg = f"Ошибка при создании правила (код {response.status_code})"
-                    print(f"❌ {error_msg}: {rule_name}")
-                    print(f"Ответ сервера: {response.text}")
-                    
-                    self.failed_files.append({
-                        'file': file_path,
-                        'rule': rule_name,
-                        'error': error_msg,
-                        'code': response.status_code,
-                        'response': response.text
-                    })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text)
+                    # Используем ErrorHandler для обработки других ошибок
+                    if not self.api_client.error_handler.handle_common_error(response, f"Создание правила '{rule_name}'"):
+                        self.failed_files.append({
+                            'file': file_path,
+                            'rule': rule_name,
+                            'error': f"Ошибка {response.status_code}",
+                            'code': response.status_code,
+                            'response': response.text[:200] if response.text else ""
+                        })
+                        
+                        if problem_dir:
+                            self._move_to_problem_directory(file_path, problem_dir, f"Ошибка {response.status_code}", response.text[:200] if response.text else "")
                     return False
         
         except json.JSONDecodeError as e:
@@ -590,6 +487,7 @@ class RulesManager:
             if problem_dir:
                 self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
+    
 
     def _move_to_problem_directory(self, file_path, problem_dir, error_reason="", server_response=""):
         """Перемещает файл в problem директорию"""
@@ -634,7 +532,7 @@ class RulesManager:
         self.problem_dir_created = False
         
         # Сохраняем текущий тенант для возможного восстановления
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id  # Исправлено
         
         # Создаем директорию для проблемных файлов
         problem_dir = self._create_problem_directory(directory_path)
@@ -645,8 +543,8 @@ class RulesManager:
             print("Не удалось получить ID шаблона политики")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
+                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         print(f"\nИспользуется шаблон политики с ID: {template_id}")
@@ -657,8 +555,8 @@ class RulesManager:
             print("Не удалось получить список доступных действий")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
+                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Выводим список доступных действий
@@ -709,8 +607,8 @@ class RulesManager:
             print("В указанной директории нет .ptafpro файлов")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
+                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Выводим список файлов для выбора
@@ -738,8 +636,8 @@ class RulesManager:
                 
                 # Восстанавливаем исходный тенант
                 if original_tenant_id:
-                    self.auth_manager.tenant_id = original_tenant_id
-                    self.auth_manager.update_jwt_with_tenant(self.make_request)
+                    self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                    self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                 
                 # Выводим итоговую статистику
                 fail_count = len(self.failed_files)
@@ -779,8 +677,8 @@ class RulesManager:
                     
                     # Восстанавливаем исходный тенант
                     if original_tenant_id:
-                        self.auth_manager.tenant_id = original_tenant_id
-                        self.auth_manager.update_jwt_with_tenant(self.make_request)
+                        self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                        self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                     
                     # Выводим итоговую статистику
                     fail_count = len([i for i in selected_indices if i not in valid_indices]) + \
@@ -804,8 +702,8 @@ class RulesManager:
             elif choice == '3':
                 # Восстанавливаем исходный тенант
                 if original_tenant_id:
-                    self.auth_manager.tenant_id = original_tenant_id
-                    self.auth_manager.update_jwt_with_tenant(self.make_request)
+                    self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                    self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                 return False
             
             else:
@@ -841,7 +739,7 @@ class RulesManager:
             if choice == '1':
                 # Используем TenantManager для выбора тенанта
                 from tenants import TenantManager
-                tenant_manager = TenantManager(self.auth_manager, self.make_request)
+                tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)  # Исправлено
                 if not tenant_manager.select_tenant_interactive():
                     print("Не удалось выбрать тенант")
                     continue
@@ -850,3 +748,14 @@ class RulesManager:
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
+    
+    def _select_tenant_for_operation(self, operation_name):
+        """Выбирает тенант для операции"""
+        print(f"\n=== {operation_name} ===")
+        print("Выберите тенант для выполнения операции:")
+        
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        if not tenant_manager.select_tenant_interactive():
+            print("❌ Не удалось выбрать тенант")
+            return False
+        return True

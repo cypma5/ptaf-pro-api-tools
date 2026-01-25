@@ -1,261 +1,185 @@
+# policy_template_manager.py (обновленный с выбором тенанта после пункта)
 import os
 import json
 import datetime
-from urllib.parse import urljoin
+from tenants import TenantManager
 
 class PolicyTemplateManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
-
+    def __init__(self, api_client):
+        self.api_client = api_client
+    
+    # ==================== ПОЛУЧЕНИЕ ДАННЫХ ====================
+    
     def get_vendor_templates(self):
         """Получает список системных шаблонов"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/vendor")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении системных шаблонов")
-            return None
-        
-        templates = response.json()
-        if isinstance(templates, dict) and 'items' in templates:
-            return templates['items']
-        elif isinstance(templates, list):
-            return templates
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
+        response = self.api_client.get_vendor_templates()
+        return self.api_client._parse_response_items(response)
+    
     def get_user_templates(self):
         """Получает список пользовательских шаблонов"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении пользовательских шаблонов")
-            return None
-        
-        templates = response.json()
-        if isinstance(templates, dict) and 'items' in templates:
-            return templates['items']
-        elif isinstance(templates, list):
-            return templates
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
-    def get_policies_with_user_rules(self):
+        response = self.api_client.get_user_templates()
+        return self.api_client._parse_response_items(response)
+    
+    def get_templates_with_user_rules(self):
         """Получает список шаблонов с пользовательскими правилами"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/with_user_rules")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении шаблонов с пользовательскими правилами")
-            return None
-        
-        templates = response.json()
-        if isinstance(templates, dict) and 'items' in templates:
-            return templates['items']
-        elif isinstance(templates, list):
-            return templates
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
-    def get_security_policies(self):
-        """Получает список политик безопасности"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении политик безопасности")
-            return None
-        
-        policies = response.json()
-        if isinstance(policies, dict) and 'items' in policies:
-            return policies['items']
-        elif isinstance(policies, list):
-            return policies
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
+        response = self.api_client.get_templates_with_user_rules()
+        return self.api_client._parse_response_items(response)
+    
     def get_template_details(self, template_id):
         """Получает детали шаблона"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении деталей шаблона")
-            return None
-        
-        return response.json()
-
+        response = self.api_client.get_template_details(template_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
     def get_template_rules(self, template_id):
         """Получает список правил шаблона"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении правил шаблона")
-            return None
-        
-        rules = response.json()
-        if isinstance(rules, dict) and 'items' in rules:
-            return rules['items']
-        elif isinstance(rules, list):
-            return rules
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
+        response = self.api_client.get_template_rules(template_id)
+        return self.api_client._parse_response_items(response)
+    
     def get_rule_details(self, template_id, rule_id):
         """Получает детали конкретного правила"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении деталей правила")
-            return None
-        
-        return response.json()
-
+        response = self.api_client.get_template_rule_details(template_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
     def get_rule_aggregation(self, template_id, rule_id):
         """Получает настройки агрегации правила"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}/aggregation")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении настроек агрегации")
-            return None
-        
-        return response.json()
-
+        response = self.api_client.get_template_rule_aggregation(template_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
+    def get_available_actions(self):
+        """Получает список доступных действий"""
+        response = self.api_client.get_actions()
+        return self.api_client._parse_response_items(response)
+    
+    def get_available_lists(self):
+        """Получает список доступных списков"""
+        response = self.api_client.get_lists()
+        return self.api_client._parse_response_items(response)
+    
+    # ==================== СОЗДАНИЕ И ОБНОВЛЕНИЕ ====================
+    
     def create_template(self, name, vendor_template_ids, has_user_rules=False):
         """Создает новый шаблон"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user")
-        
         payload = {
             "name": name,
             "has_user_rules": has_user_rules,
             "templates": vendor_template_ids
         }
-        
-        response = self.make_request("POST", url, json=payload)
-        if not response or response.status_code != 201:
-            print(f"Ошибка при создании шаблона")
-            return None
-        
-        return response.json()
-
+        response = self.api_client.create_template(payload)
+        if response and response.status_code == 201:
+            return response.json()
+        return None
+    
     def create_policy_from_template(self, policy_name, template_id):
         """Создает политику на основе шаблона"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies")
-        
         payload = {
             "name": policy_name,
             "template_id": template_id
         }
-        
-        response = self.make_request("POST", url, json=payload)
-        if not response or response.status_code != 201:
-            print(f"Ошибка при создании политики")
-            return None
-        
-        return response.json()
-
-    def duplicate_template_in_tenant(self, source_template_id, new_name):
-        """Копирует шаблон в текущем тенанте"""
-        print(f"\nКопирование шаблона в текущем тенанте...")
-        
-        template_details = self.get_template_details(source_template_id)
-        if not template_details:
-            print("Не удалось получить детали шаблона")
-            return None
-        
-        template_name = new_name or f"{template_details.get('name', 'Шаблон')} (копия)"
-        vendor_template_ids = template_details.get('templates', [])
-        has_user_rules = template_details.get('has_user_rules', False)
-        
-        print(f"Создание нового шаблона: {template_name}")
-        
-        new_template = self.create_template(template_name, vendor_template_ids, has_user_rules)
-        if not new_template:
-            print("Не удалось создать шаблон")
-            return None
-        
-        new_template_id = new_template.get('id')
-        print(f"Новый шаблон создан с ID: {new_template_id}")
-        
-        export_file = self.export_template(source_template_id, "temp_export")
-        if export_file:
-            result = self.import_template(export_file, self.auth_manager.tenant_id)
-            if result:
-                print("✅ Шаблон успешно скопирован")
-            else:
-                print("⚠️ Шаблон создан, но правила не скопированы")
-            
-            try:
-                os.remove(export_file)
-                if os.path.exists("temp_export") and not os.listdir("temp_export"):
-                    os.rmdir("temp_export")
-            except:
-                pass
-        else:
-            print("✅ Шаблон создан, но без правил")
-        
-        return new_template
-
+        response = self.api_client.create_policy(payload)
+        if response and response.status_code == 201:
+            return response.json()
+        return None
+    
     def update_rule(self, template_id, rule_id, update_data):
         """Обновляет правило"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}")
-        
-        response = self.make_request("PATCH", url, json=update_data)
-        return response
-
+        return self.api_client.update_template_rule(template_id, rule_id, update_data)
+    
     def update_rule_aggregation(self, template_id, rule_id, aggregation_data):
         """Обновляет настройки агрегации"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}/aggregation")
+        return self.api_client.update_template_rule_aggregation(template_id, rule_id, aggregation_data)
+    
+    def add_syslog_action_to_template(self, template_id, syslog_action_id):
+        """Добавляет действие send_to_syslog в правила шаблона"""
+        rules = self.get_template_rules(template_id)
+        if not rules:
+            print("Не найдено правил в указанном шаблоне")
+            return 0, 0
         
-        response = self.make_request("PATCH", url, json=aggregation_data)
-        return response
-
-    def get_available_actions(self):
-        """Получает список доступных действий"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/actions")
+        total_updated = 0
+        total_rules = len(rules)
         
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении действий")
-            return None
+        for rule in rules:
+            rule_id = rule.get('id')
+            rule_name = rule.get('name', 'Без названия')
+            
+            # Получаем детали правила
+            rule_details = self.get_rule_details(template_id, rule_id)
+            if not rule_details:
+                print(f"Не удалось получить детали правила '{rule_name}'")
+                continue
+            
+            current_actions = rule_details.get('actions', [])
+            
+            # Проверяем, есть ли уже это действие в правиле
+            if syslog_action_id in current_actions:
+                continue
+            
+            # Добавляем действие
+            new_actions = current_actions + [syslog_action_id]
+            
+            # Обновляем только действия
+            update_data = {"actions": new_actions}
+            response = self.update_rule(template_id, rule_id, update_data)
+            
+            if response and response.status_code == 200:
+                print(f"Успешно добавлено действие в правило '{rule_name}'")
+                total_updated += 1
+            else:
+                error_msg = response.text if response else "Неизвестная ошибка"
+                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
         
-        actions = response.json()
-        if isinstance(actions, dict) and 'items' in actions:
-            return actions['items']
-        elif isinstance(actions, list):
-            return actions
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
-    def get_available_lists(self):
-        """Получает список доступных списков"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/lists")
+        return total_updated, total_rules
+    
+    def replace_actions_in_template(self, template_id, old_action_id, new_action_id):
+        """Заменяет действие в указанном шаблоне политики"""
+        rules = self.get_template_rules(template_id)
+        if not rules:
+            print("Не найдено правил в указанном шаблоне")
+            return 0, 0
         
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении списков")
-            return None
+        total_replaced = 0
+        total_rules = len(rules)
         
-        lists = response.json()
-        if isinstance(lists, dict) and 'items' in lists:
-            return lists['items']
-        elif isinstance(lists, list):
-            return lists
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
+        for rule in rules:
+            rule_id = rule.get('id')
+            rule_name = rule.get('name', 'Без названия')
+            
+            # Получаем детали правила
+            rule_details = self.get_rule_details(template_id, rule_id)
+            if not rule_details:
+                print(f"Не удалось получить детали правила '{rule_name}'")
+                continue
+            
+            current_actions = rule_details.get('actions', [])
+            
+            # Проверяем, есть ли старое действие в правиле
+            if old_action_id not in current_actions:
+                continue
+            
+            # Заменяем действие
+            new_actions = [new_action_id if action_id == old_action_id else action_id for action_id in current_actions]
+            
+            # Обновляем только действия
+            update_data = {"actions": new_actions}
+            response = self.update_rule(template_id, rule_id, update_data)
+            
+            if response and response.status_code == 200:
+                print(f"Успешно заменено действие в правиле '{rule_name}'")
+                total_replaced += 1
+            else:
+                error_msg = response.text if response else "Неизвестная ошибка"
+                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
+        
+        return total_replaced, total_rules
+    
+    # ==================== ЭКСПОРТ/ИМПОРТ ====================
+    
     def _get_filtered_rules_with_details(self, template_id):
         """Получает только измененные правила"""
         print("Получение правил шаблона...")
@@ -285,7 +209,7 @@ class PolicyTemplateManager:
                 full_rules_data.append(rule_details)
         
         return full_rules_data
-
+    
     def export_template(self, template_id, export_dir="templates_export"):
         """Экспортирует шаблон"""
         print(f"\nЭкспорт шаблона политики ID: {template_id}")
@@ -328,11 +252,13 @@ class PolicyTemplateManager:
                 related_actions = [action for action in all_actions if action.get('id') in action_ids]
                 print(f"Найдено {len(related_actions)} действий")
         
+        # Для глобальных списков нужен отдельный менеджер
         related_global_lists = []
         if global_list_ids:
             print(f"Получение связанных глобальных списков ({len(global_list_ids)})...")
+            # Используем GlobalListsManager через self.api_client
             from global_lists_manager import GlobalListsManager
-            lists_manager = GlobalListsManager(self.auth_manager, self.make_request)
+            lists_manager = GlobalListsManager(self.api_client)
             all_lists = lists_manager.get_global_lists()
             
             if all_lists:
@@ -353,9 +279,9 @@ class PolicyTemplateManager:
             "related_global_lists": related_global_lists,
             "export_info": {
                 "export_time": datetime.datetime.now().isoformat(),
-                "tenant_id": self.auth_manager.tenant_id,
-                "api_path": self.auth_manager.api_path,
-                "base_url": self.auth_manager.base_url,
+                "tenant_id": self.api_client.auth_manager.tenant_id,
+                "api_path": self.api_client.auth_manager.api_path,
+                "base_url": self.api_client.auth_manager.base_url,
                 "export_type": "modified_rules_only",
                 "rules_count": len(modified_rules_data),
                 "actions_count": len(related_actions),
@@ -372,19 +298,23 @@ class PolicyTemplateManager:
         filename = f"{safe_name}_{timestamp}.template.json"
         filepath = os.path.join(export_dir, filename)
         
+        # Получаем абсолютный путь
+        absolute_filepath = os.path.abspath(filepath)
+        
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
-            print(f"✅ Шаблон успешно экспортирован в файл: {filepath}")
+            print(f"✅ Шаблон успешно экспортирован в файл:")
+            print(f"📁 Полный путь: {absolute_filepath}")
             print(f"📊 Экспортировано:")
             print(f"  - Измененных правил: {len(modified_rules_data)}")
             print(f"  - Связанных действий: {len(related_actions)}")
             print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
-            return filepath
+            return absolute_filepath  # Возвращаем абсолютный путь
         except Exception as e:
             print(f"❌ Ошибка при сохранении шаблона: {e}")
             return None
-
+    
     def import_template(self, file_path, target_tenant_id=None):
         """Импортирует шаблон"""
         print(f"\nИмпорт шаблона из файла: {file_path}")
@@ -416,14 +346,14 @@ class PolicyTemplateManager:
         print(f"  - Связанных действий: {len(related_actions)}")
         print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
         
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         if target_tenant_id and target_tenant_id != original_tenant_id:
             print(f"\n🔀 Переключаемся на тенант: {target_tenant_id}")
-            self.auth_manager.tenant_id = target_tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print(f"❌ Не удалось переключиться на тенант")
-                self.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 return False
         
         try:
@@ -442,7 +372,7 @@ class PolicyTemplateManager:
                         json.dump(lists_export_data, f, ensure_ascii=False, indent=2)
                     
                     from global_lists_manager import GlobalListsManager
-                    lists_manager = GlobalListsManager(self.auth_manager, self.make_request)
+                    lists_manager = GlobalListsManager(self.api_client)
                     
                     import_result = lists_manager.import_global_lists(temp_lists_file, target_tenant_id)
                     
@@ -488,9 +418,7 @@ class PolicyTemplateManager:
                     if 'id' in action_data:
                         del action_data['id']
                     
-                    from actions_backup_manager import ActionsBackupManager
-                    actions_manager = ActionsBackupManager(self.auth_manager, self.make_request)
-                    response = actions_manager.create_custom_action(action_data)
+                    response = self.api_client.create_action(action_data)
                     
                     if response and response.status_code == 201:
                         new_action = response.json()
@@ -649,18 +577,60 @@ class PolicyTemplateManager:
             
         finally:
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
-
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+    
+    def duplicate_template_in_tenant(self, source_template_id, new_name):
+        """Копирует шаблон в текущем тенанте"""
+        print(f"\nКопирование шаблона в текущем тенанте...")
+        
+        template_details = self.get_template_details(source_template_id)
+        if not template_details:
+            print("Не удалось получить детали шаблона")
+            return None
+        
+        template_name = new_name or f"{template_details.get('name', 'Шаблон')} (копия)"
+        vendor_template_ids = template_details.get('templates', [])
+        has_user_rules = template_details.get('has_user_rules', False)
+        
+        print(f"Создание нового шаблона: {template_name}")
+        
+        new_template = self.create_template(template_name, vendor_template_ids, has_user_rules)
+        if not new_template:
+            print("Не удалось создать шаблон")
+            return None
+        
+        new_template_id = new_template.get('id')
+        print(f"Новый шаблон создан с ID: {new_template_id}")
+        
+        export_file = self.export_template(source_template_id, "temp_export")
+        if export_file:
+            result = self.import_template(export_file, self.api_client.auth_manager.tenant_id)
+            if result:
+                print("✅ Шаблон успешно скопирован")
+            else:
+                print("⚠️ Шаблон создан, но правила не скопированы")
+            
+            try:
+                os.remove(export_file)
+                if os.path.exists("temp_export") and not os.listdir("temp_export"):
+                    os.rmdir("temp_export")
+            except:
+                pass
+        else:
+            print("✅ Шаблон создан, но без правил")
+        
+        return new_template
+    
     def copy_template_to_another_tenant(self, source_template_id, target_tenant_id):
         """Копирует шаблон в другой тенант"""
         print(f"\nКопирование шаблона в другой тенант...")
         
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         try:
-            self.auth_manager.tenant_id = original_tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print("❌ Не удалось переключиться на исходный тенант")
                 return False
             
@@ -686,9 +656,11 @@ class PolicyTemplateManager:
             
         finally:
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
-
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+    
+    # ==================== ИНТЕРАКТИВНЫЕ МЕТОДЫ ====================
+    
     def _select_template_interactive(self):
         """Интерактивный выбор шаблона"""
         templates = self.get_user_templates()
@@ -713,7 +685,44 @@ class PolicyTemplateManager:
                     print("Некорректный номер")
             except ValueError:
                 print("Пожалуйста, введите число")
-
+    
+    def _select_vendor_template_interactive(self):
+        """Интерактивный выбор системного шаблона"""
+        templates = self.get_vendor_templates()
+        if not templates:
+            print("Не найдено системных шаблонов")
+            return None
+        
+        print("\nДоступные системные шаблоны (наборы правил):")
+        for i, template in enumerate(templates, 1):
+            print(f"{i}. {template.get('name', 'Без названия')} (ID: {template.get('id')})")
+        
+        while True:
+            try:
+                choice = input("\nВыберите номер системного шаблона (или 'q' для отмены): ").strip()
+                if choice.lower() == 'q':
+                    return None
+                
+                index = int(choice) - 1
+                if 0 <= index < len(templates):
+                    return templates[index]
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
+    
+    def _select_tenant_for_operation(self, operation_name):
+        """Выбирает тенант для операции"""
+        print(f"\n=== {operation_name} ===")
+        print("Выберите тенант для выполнения операции:")
+        
+        # Используем TenantManager для выбора тенанта
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        if not tenant_manager.select_tenant_interactive():
+            print("❌ Не удалось выбрать тенант")
+            return False
+        return True
+    
     def manage_policy_templates_extended(self):
         """Расширенное управление шаблонами политик и политиками безопасности"""
         while True:
@@ -732,7 +741,7 @@ class PolicyTemplateManager:
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _manage_policy_templates_section(self):
         """Раздел управления шаблонами политик"""
         while True:
@@ -748,22 +757,39 @@ class PolicyTemplateManager:
             choice = input("\nВыберите действие (1-7): ")
             
             if choice == '1':
+                if not self._select_tenant_for_operation("ПОКАЗАТЬ СПИСОК СИСТЕМНЫХ ШАБЛОНОВ"):
+                    continue
                 self._show_vendor_templates()
+            
             elif choice == '2':
+                if not self._select_tenant_for_operation("СОЗДАТЬ НОВЫЙ ШАБЛОН"):
+                    continue
                 self._create_new_template()
+            
             elif choice == '3':
+                if not self._select_tenant_for_operation("ВЫГРУЗИТЬ ШАБЛОН"):
+                    continue
                 self._export_template()
+            
             elif choice == '4':
+                # Для импорта не выбираем тенант заранее, выбираем в методе
                 self._import_template()
+            
             elif choice == '5':
-                self._copy_template_to_another_tenant()
+                # Для копирования в другой тенант тоже не нужно выбирать текущий
+                self._copy_template_to_another_tenant_menu()
+            
             elif choice == '6':
+                if not self._select_tenant_for_operation("КОПИРОВАТЬ ШАБЛОН В ЭТОМ ТЕНАНТЕ"):
+                    continue
                 self._duplicate_template_in_tenant()
+            
             elif choice == '7':
                 return
+            
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _manage_security_policies_section(self):
         """Раздел управления политиками безопасности"""
         while True:
@@ -775,14 +801,21 @@ class PolicyTemplateManager:
             choice = input("\nВыберите действие (1-3): ")
             
             if choice == '1':
+                if not self._select_tenant_for_operation("ПОКАЗАТЬ СПИСОК ПОЛИТИК"):
+                    continue
                 self._show_security_policies()
+            
             elif choice == '2':
+                if not self._select_tenant_for_operation("СОЗДАТЬ ШАБЛОН НА ОСНОВЕ ПОЛИТИКИ"):
+                    continue
                 self._create_template_from_policy()
+            
             elif choice == '3':
                 return
+            
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _show_vendor_templates(self):
         """Показать список системных шаблонов"""
         templates = self.get_vendor_templates()
@@ -796,10 +829,13 @@ class PolicyTemplateManager:
                 print()
         else:
             print("Не найдено системных шаблонов")
-
+    
     def _show_security_policies(self):
         """Показать список политик безопасности"""
-        policies = self.get_security_policies()
+        from policies_manager import PoliciesManager
+        policies_manager = PoliciesManager(self.api_client)
+        policies = policies_manager.get_security_policies()
+        
         if policies:
             print("\nПолитики безопасности:")
             for i, policy in enumerate(policies, 1):
@@ -814,7 +850,7 @@ class PolicyTemplateManager:
                 print()
         else:
             print("Не найдено политик безопасности")
-
+    
     def _create_new_template(self):
         """Создать новый шаблон политики"""
         print("\nСоздание нового шаблона политики")
@@ -858,13 +894,9 @@ class PolicyTemplateManager:
             print(f"✅ Шаблон '{name}' успешно создан (ID: {result.get('id')})")
         else:
             print("❌ Ошибка при создании шаблона")
-
+    
     def _export_template(self):
         """Экспортировать шаблон"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
         template = self._select_template_interactive()
         if not template:
             return
@@ -880,54 +912,29 @@ class PolicyTemplateManager:
         export_file = self.export_template(template_id, export_dir)
         
         if export_file:
-            print(f"✅ Шаблон успешно экспортирован: {export_file}")
-
+            print(f"\n✅ Шаблон успешно экспортирован:")
+            print(f"📁 Расположение: {export_file}")
+    
     def _import_template(self):
         """Импортировать шаблон из JSON"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
         file_path = input("Введите путь к JSON файлу шаблона: ").strip()
         if not file_path or not os.path.exists(file_path):
             print("Файл не найден")
             return
         
-        # Используем метод выбора тенанта из SnapshotManager
-        from snapshot_manager import SnapshotManager
-        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
+        # Используем TenantManager для выбора тенанта
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
         
-        print("\nИмпортировать в:")
-        print("1. Текущий тенант")
-        print("2. Другой тенант")
+        target_tenant = tenant_manager.select_single_tenant("Выберите тенант для импорта шаблона:")
+        if not target_tenant:
+            print("Импорт отменен")
+            return
         
-        import_choice = input("Ваш выбор (1-2): ").strip()
+        target_tenant_id = target_tenant.get('id')
+        target_tenant_name = target_tenant.get('name', 'Без названия')
         
-        target_tenant_id = None
-        if import_choice == '2':
-            tenants = snapshot_manager.get_available_tenants()
-            
-            if tenants:
-                print("\nВыберите целевой тенант:")
-                for i, tenant in enumerate(tenants, 1):
-                    print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-                
-                while True:
-                    try:
-                        tenant_choice = input("Выберите номер тенанта: ").strip()
-                        if tenant_choice.lower() == 'q':
-                            return
-                        
-                        index = int(tenant_choice) - 1
-                        if 0 <= index < len(tenants):
-                            target_tenant_id = tenants[index].get('id')
-                            break
-                        else:
-                            print("Некорректный номер")
-                    except ValueError:
-                        print("Пожалуйста, введите число")
-        
-        print("\nИмпорт шаблона...")
+        print(f"\nИмпорт шаблона в тенант '{target_tenant_name}'...")
         result = self.import_template(file_path, target_tenant_id)
         
         if result:
@@ -935,60 +942,56 @@ class PolicyTemplateManager:
         else:
             print("❌ Импорт не удался")
 
-    def _copy_template_to_another_tenant(self):
-        """Копировать шаблон в другой тенант"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
+    def _copy_template_to_another_tenant_menu(self):
+        """Меню копирования шаблона в другой тенант"""
+        print("\nКопирование шаблона в другой тенант")
+        
+        # Используем TenantManager для выбора тенантов
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        
+        # Выбираем исходный тенант и шаблон
+        source_tenant = tenant_manager.select_single_tenant("Выберите исходный тенант (откуда копировать):")
+        if not source_tenant:
+            print("Копирование отменено")
             return
         
-        print("\nВыберите шаблон для копирования:")
+        source_tenant_id = source_tenant.get('id')
+        source_tenant_name = source_tenant.get('name', 'Без названия')
+        
+        # Переключаемся на исходный тенант
+        self.api_client.auth_manager.tenant_id = source_tenant_id
+        if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+            print(f"❌ Не удалось переключиться на тенант {source_tenant_name}")
+            return
+        
         template = self._select_template_interactive()
         if not template:
+            print("Копирование отменено")
             return
         
         template_id = template.get('id')
         template_name = template.get('name', 'Без названия')
         
-        # Используем SnapshotManager для выбора тенанта
-        from snapshot_manager import SnapshotManager
-        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
-        tenants = snapshot_manager.get_available_tenants()
-        
-        if not tenants:
-            print("Не удалось получить список тенантов")
+        # Выбираем целевой тенант
+        target_tenant = tenant_manager.select_single_tenant("Выберите целевой тенант (куда копировать):")
+        if not target_tenant:
+            print("Копирование отменено")
             return
         
-        print("\nВыберите целевой тенант:")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
+        target_tenant_id = target_tenant.get('id')
+        target_tenant_name = target_tenant.get('name', 'Без названия')
         
-        while True:
-            try:
-                choice = input("Выберите номер целевого тенанта (или 'q' для отмены): ").strip()
-                if choice.lower() == 'q':
-                    return
-                
-                index = int(choice) - 1
-                if 0 <= index < len(tenants):
-                    target_tenant = tenants[index]
-                    target_tenant_id = target_tenant.get('id')
-                    target_tenant_name = target_tenant.get('name', 'Без названия')
-                    break
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-        
-        if target_tenant_id == self.auth_manager.tenant_id:
+        if source_tenant_id == target_tenant_id:
             print("Исходный и целевой тенанты совпадают")
             return
         
-        confirm = input(f"\nВы уверены, что хотите скопировать шаблон '{template_name}' в тенант '{target_tenant_name}'? (y/n): ").lower()
+        confirm = input(f"\nВы уверены, что хотите скопировать шаблон '{template_name}' из тенанта '{source_tenant_name}' в тенант '{target_tenant_name}'? (y/n): ").lower()
         if confirm != 'y':
             print("Копирование отменено")
             return
         
-        print(f"\nКопирование шаблона '{template_name}' в тенант '{target_tenant_name}'...")
+        print(f"\nКопирование шаблона '{template_name}' из '{source_tenant_name}' в '{target_tenant_name}'...")
         result = self.copy_template_to_another_tenant(template_id, target_tenant_id)
         
         if result:
@@ -998,10 +1001,6 @@ class PolicyTemplateManager:
 
     def _duplicate_template_in_tenant(self):
         """Копировать шаблон в текущем тенанте"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
         print("\nВыберите шаблон для копирования:")
         template = self._select_template_interactive()
         if not template:
@@ -1024,22 +1023,46 @@ class PolicyTemplateManager:
             print("✅ Копирование завершено успешно!")
         else:
             print("❌ Копирование не удалось")
-
+    
     def _create_template_from_policy(self):
         """Создать шаблон на основе политики"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
+        from policies_manager import PoliciesManager
+        policies_manager = PoliciesManager(self.api_client)
         
         print("\nВыберите политику безопасности для создания шаблона:")
-        policy = self._select_security_policy_interactive()
-        if not policy:
+        policies = policies_manager.get_security_policies()
+        if not policies:
+            print("Не найдено политик безопасности")
             return
+        
+        print("\nДоступные политики безопасности:")
+        for i, policy in enumerate(policies, 1):
+            print(f"{i}. {policy.get('name', 'Без названия')} (ID: {policy.get('id')})")
+        
+        while True:
+            try:
+                choice = input("\nВыберите номер политики (или 'q' для отмены): ").strip()
+                if choice.lower() == 'q':
+                    return
+                
+                index = int(choice) - 1
+                if 0 <= index < len(policies):
+                    policy = policies[index]
+                    break
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
         
         policy_id = policy.get('id')
         policy_name = policy.get('name', 'Без названия')
         
-        template_info = policy.get('template', {})
+        policy_details = policies_manager.get_policy_details(policy_id)
+        if not policy_details:
+            print("Не удалось получить информацию о политике")
+            return
+        
+        template_info = policy_details.get('template', {})
         template_id = template_info.get('id')
         
         if not template_id:
@@ -1104,78 +1127,3 @@ class PolicyTemplateManager:
                     pass
         else:
             print("✅ Шаблон создан, но без правил")
-
-    def _select_template_interactive(self):
-        """Интерактивный выбор шаблона"""
-        templates = self.get_user_templates()
-        if not templates:
-            print("Не найдено шаблонов")
-            return None
-        
-        print("\nДоступные шаблоны политик:")
-        for i, template in enumerate(templates, 1):
-            print(f"{i}. {template.get('name', 'Без названия')} (ID: {template.get('id')})")
-        
-        while True:
-            try:
-                choice = input("\nВыберите номер шаблона (или 'q' для отмены): ").strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(templates):
-                    return templates[index]
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-
-    def _select_security_policy_interactive(self):
-        """Интерактивный выбор политики безопасности"""
-        policies = self.get_security_policies()
-        if not policies:
-            print("Не найдено политик безопасности")
-            return None
-        
-        print("\nДоступные политики безопасности:")
-        for i, policy in enumerate(policies, 1):
-            print(f"{i}. {policy.get('name', 'Без названия')} (ID: {policy.get('id')})")
-        
-        while True:
-            try:
-                choice = input("\nВыберите номер политики (или 'q' для отмены): ").strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(policies):
-                    return policies[index]
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-
-    def _select_vendor_template_interactive(self):
-        """Интерактивный выбор системного шаблона"""
-        templates = self.get_vendor_templates()
-        if not templates:
-            print("Не найдено системных шаблонов")
-            return None
-        
-        print("\nДоступные системные шаблоны (наборы правил):")
-        for i, template in enumerate(templates, 1):
-            print(f"{i}. {template.get('name', 'Без названия')} (ID: {template.get('id')})")
-        
-        while True:
-            try:
-                choice = input("\nВыберите номер системного шаблона (или 'q' для отмены): ").strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(templates):
-                    return templates[index]
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")

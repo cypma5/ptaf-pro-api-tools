@@ -1,72 +1,39 @@
+# global_lists_manager.py (обновленный с APIClient)
 import os
 import json
 import datetime
-from urllib.parse import urljoin
 import requests
 
 class GlobalListsManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
-
+    def __init__(self, api_client):
+        self.api_client = api_client
+    
     def get_global_lists(self):
         """Получает список всех глобальных списков"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/global_lists")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении глобальных списков")
-            return None
-        
-        lists_data = response.json()
-        if isinstance(lists_data, dict) and 'items' in lists_data:
-            return lists_data['items']
-        elif isinstance(lists_data, list):
-            return lists_data
-        else:
-            print(f"Неподдерживаемый формат ответа")
-            return None
-
+        response = self.api_client.get_global_lists()
+        return self.api_client._parse_response_items(response)
+    
     def get_global_list_details(self, list_id):
         """Получает детали конкретного глобального списка"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/global_lists/{list_id}")
-        
-        response = self.make_request("GET", url)
-        if not response or response.status_code != 200:
-            print(f"Ошибка при получении деталей списка {list_id}")
-            return None
-        
-        return response.json()
-
+        response = self.api_client.get_global_list_details(list_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
     def create_dynamic_global_list(self, name, description=""):
         """Создает новый динамический глобальный список"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/global_lists")
-        
         files = {
             'name': (None, name),
             'description': (None, description),
             'type': (None, 'DYNAMIC')
         }
-        
-        headers = self._get_auth_headers()
-        response = requests.post(
-            url,
-            files=files,
-            headers=headers,
-            verify=self.auth_manager.ssl_verify,
-            timeout=30
-        )
-        
-        if response.status_code == 201:
+        response = self.api_client.create_global_list(files)
+        if response and response.status_code == 201:
             return response.json()
-        else:
-            print(f"Ошибка при создании динамического списка: {response.status_code}")
-            return None
-
+        return None
+    
     def create_static_global_list(self, name, description="", items=None):
         """Создает новый статический глобальный список"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/global_lists")
-        
         files = {
             'name': (None, name),
             'description': (None, description),
@@ -76,30 +43,11 @@ class GlobalListsManager:
         if items:
             files['data'] = (None, json.dumps(items), 'application/json')
         
-        headers = self._get_auth_headers()
-        response = requests.post(
-            url,
-            files=files,
-            headers=headers,
-            verify=self.auth_manager.ssl_verify,
-            timeout=30
-        )
-        
-        if response.status_code == 201:
+        response = self.api_client.create_global_list(files)
+        if response and response.status_code == 201:
             return response.json()
-        else:
-            print(f"Ошибка при создании статического списка: {response.status_code}")
-            return None
-
-    def _get_auth_headers(self):
-        """Получает заголовки авторизации для прямых requests"""
-        headers = {
-            "User-Agent": "PTAF-API-Client/1.0",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {self.auth_manager.access_token}" if self.auth_manager.access_token else "",
-        }
-        return headers
-
+        return None
+    
     def get_non_system_lists(self):
         """Получает только пользовательские (не системные) списки"""
         all_lists = self.get_global_lists()
@@ -117,7 +65,7 @@ class GlobalListsManager:
                     detailed_lists.append(details)
         
         return detailed_lists
-
+    
     def find_list_by_name_and_type(self, name, list_type):
         """Ищет список по имени и типу"""
         all_lists = self.get_global_lists()
@@ -131,7 +79,7 @@ class GlobalListsManager:
                 return lst
         
         return None
-
+    
     def check_list_exists(self, list_data):
         """Проверяет, существует ли список с такими же параметрами"""
         name = list_data.get('name')
@@ -141,7 +89,7 @@ class GlobalListsManager:
             return False
         
         return self.find_list_by_name_and_type(name, list_type) is not None
-
+    
     def create_list_from_data(self, list_data):
         """Создает список из данных импорта"""
         name = list_data.get('name')
@@ -171,7 +119,7 @@ class GlobalListsManager:
             print(f"  ✗ Ошибка при создании списка '{name}'")
         
         return result
-
+    
     def export_global_lists(self, export_dir="global_lists_export"):
         """Экспортирует пользовательские глобальные списки"""
         print("\nЭкспорт пользовательских глобальных списков...")
@@ -188,9 +136,9 @@ class GlobalListsManager:
             "global_lists": non_system_lists,
             "export_info": {
                 "export_time": datetime.datetime.now().isoformat(),
-                "tenant_id": self.auth_manager.tenant_id,
-                "api_path": self.auth_manager.api_path,
-                "base_url": self.auth_manager.base_url,
+                "tenant_id": self.api_client.auth_manager.tenant_id,
+                "api_path": self.api_client.auth_manager.api_path,
+                "base_url": self.api_client.auth_manager.base_url,
                 "lists_count": len(non_system_lists)
             }
         }
@@ -201,15 +149,19 @@ class GlobalListsManager:
         filename = f"global_lists_{timestamp}.json"
         filepath = os.path.join(export_dir, filename)
         
+        # Получаем абсолютный путь
+        absolute_filepath = os.path.abspath(filepath)
+        
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
-            print(f"✅ Глобальные списки успешно экспортированы в файл: {filepath}")
-            return filepath
+            print(f"✅ Глобальные списки успешно экспортированы в файл:")
+            print(f"📁 Полный путь: {absolute_filepath}")
+            return absolute_filepath
         except Exception as e:
             print(f"❌ Ошибка при сохранении списков: {e}")
             return None
-
+    
     def import_global_lists(self, file_path, target_tenant_id=None):
         """Импортирует глобальные списки из JSON файла"""
         print(f"\nИмпорт глобальных списков из файла: {file_path}")
@@ -231,14 +183,14 @@ class GlobalListsManager:
             print("⚠️ В файле нет данных о глобальных списках")
             return True
         
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         if target_tenant_id and target_tenant_id != original_tenant_id:
             print(f"\n🔀 Переключаемся на тенант: {target_tenant_id}")
-            self.auth_manager.tenant_id = target_tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print(f"❌ Не удалось переключиться на тенант {target_tenant_id}")
-                self.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 return False
         
         try:
@@ -293,10 +245,9 @@ class GlobalListsManager:
             
         finally:
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
-
-
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+    
     def manage_global_lists(self):
         """Основное меню управления глобальными списками"""
         while True:
@@ -310,24 +261,43 @@ class GlobalListsManager:
             choice = input("\nВыберите действие (1-5): ")
             
             if choice == '1':
+                if not self._select_tenant_for_operation("ЭКСПОРТ ГЛОБАЛЬНЫХ СПИСКОВ"):
+                    continue
                 self._export_global_lists_menu()
+            
             elif choice == '2':
+                # Для импорта не выбираем тенант заранее
                 self._import_global_lists_menu()
+            
             elif choice == '3':
+                # Для копирования между тенантами тоже не нужно выбирать текущий
                 self._copy_global_lists_menu()
+            
             elif choice == '4':
+                if not self._select_tenant_for_operation("ПОКАЗАТЬ ГЛОБАЛЬНЫЕ СПИСКИ"):
+                    continue
                 self._show_global_lists_menu()
+            
             elif choice == '5':
                 return
+            
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
+    def _select_tenant_for_operation(self, operation_name):
+        """Выбирает тенант для операции"""
+        print(f"\n=== {operation_name} ===")
+        print("Выберите тенант для выполнения операции:")
+        
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        if not tenant_manager.select_tenant_interactive():
+            print("❌ Не удалось выбрать тенант")
+            return False
+        return True
+    
     def _export_global_lists_menu(self):
         """Меню экспорта глобальных списков"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
         export_dir = input("Введите путь для экспорта [global_lists_export]: ").strip()
         if not export_dir:
             export_dir = "global_lists_export"
@@ -337,31 +307,27 @@ class GlobalListsManager:
         
         if export_file:
             print(f"✅ Глобальные списки успешно экспортированы: {export_file}")
-
+    
     def _import_global_lists_menu(self):
         """Меню импорта глобальных списков"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
         file_path = input("Введите путь к JSON файлу глобальных списков: ").strip()
         if not file_path or not os.path.exists(file_path):
             print("Файл не найден")
             return
         
-        print("\nИмпортировать в:")
-        print("1. Текущий тенант")
-        print("2. Другой тенант")
+        # Используем TenantManager для выбора тенанта
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
         
-        import_choice = input("Ваш выбор (1-2): ").strip()
+        target_tenant = tenant_manager.select_single_tenant("Выберите целевой тенант для импорта:")
+        if not target_tenant:
+            print("Импорт отменен")
+            return
         
-        target_tenant_id = None
-        if import_choice == '2':
-            target_tenant_id = self._select_tenant_interactive("Выберите целевой тенант:")
-            if not target_tenant_id:
-                return
+        target_tenant_id = target_tenant.get('id')
+        target_tenant_name = target_tenant.get('name', 'Без названия')
         
-        print("\nИмпорт глобальных списков...")
+        print(f"\nИмпорт глобальных списков в тенант '{target_tenant_name}'...")
         result = self.import_global_lists(file_path, target_tenant_id)
         
         if result:
@@ -371,36 +337,27 @@ class GlobalListsManager:
 
     def _copy_global_lists_menu(self):
         """Меню копирования глобальных списков"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
+        print("\nКопирование глобальных списков между тенантами")
+        
+        # Используем TenantManager для выбора тенантов
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        
+        source_tenant, target_tenant = tenant_manager.select_source_and_target_tenants()
+        if not source_tenant or not target_tenant:
+            print("Копирование отменено")
             return
         
-        # Получаем список тенантов
-        from snapshot_manager import SnapshotManager
-        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
-        tenants = snapshot_manager.get_available_tenants()
-        
-        if not tenants:
-            print("Не удалось получить список тенантов")
-            return
-        
-        # Выбор исходного тенанта
-        print("\nВыберите исходный тенант:")
-        source_tenant_id = self._select_tenant_from_list(tenants, "Выберите номер исходного тенанта: ")
-        if not source_tenant_id:
-            return
-        
-        # Выбор целевого тенанта
-        print("\nВыберите целевой тенант:")
-        target_tenant_id = self._select_tenant_from_list(tenants, "Выберите номер целевого тенанта: ")
-        if not target_tenant_id:
-            return
+        source_tenant_id = source_tenant.get('id')
+        source_tenant_name = source_tenant.get('name', 'Без названия')
+        target_tenant_id = target_tenant.get('id')
+        target_tenant_name = target_tenant.get('name', 'Без названия')
         
         if source_tenant_id == target_tenant_id:
             print("Исходный и целевой тенанты совпадают")
             return
         
-        confirm = input(f"\nВы уверены, что хотите скопировать глобальные списки? (y/n): ").lower()
+        confirm = input(f"\nВы уверены, что хотите скопировать глобальные списки из '{source_tenant_name}' в '{target_tenant_name}'? (y/n): ").lower()
         if confirm != 'y':
             print("Копирование отменено")
             return
@@ -413,82 +370,15 @@ class GlobalListsManager:
         else:
             print("❌ Копирование не удалось")
 
-    def _show_global_lists_menu(self):
-        """Меню показа списка глобальных списков"""
-        if not self.auth_manager.tenant_id:
-            print("Сначала выберите тенант")
-            return
-        
-        lists = self.get_global_lists()
-        if lists:
-            print("\nГлобальные списки:")
-            for i, lst in enumerate(lists, 1):
-                print(f"{i}. {lst.get('name', 'Без названия')}")
-                print(f"   ID: {lst.get('id')}")
-                print(f"   Тип: {lst.get('type')}")
-                print(f"   Системный: {'Да' if lst.get('is_system', True) else 'Нет'}")
-                print(f"   Размер: {lst.get('size', 0)}")
-                print(f"   Описание: {lst.get('description', 'Нет описания')}")
-                print()
-        else:
-            print("Не найдено глобальных списков")
-
-    def _select_tenant_interactive(self, prompt="Выберите тенант:"):
-        """Интерактивный выбор тенанта"""
-        from snapshot_manager import SnapshotManager
-        snapshot_manager = SnapshotManager(self.auth_manager, self.make_request)
-        tenants = snapshot_manager.get_available_tenants()
-        
-        if not tenants:
-            print("Не удалось получить список тенантов")
-            return None
-        
-        print(f"\n{prompt}")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        while True:
-            try:
-                choice = input("Выберите номер тенанта (или 'q' для отмены): ").strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(tenants):
-                    return tenants[index].get('id')
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-
-    def _select_tenant_from_list(self, tenants, prompt):
-        """Выбор тенанта из готового списка"""
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        while True:
-            try:
-                choice = input(prompt).strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(tenants):
-                    return tenants[index].get('id')
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-
     def copy_global_lists_to_another_tenant(self, source_tenant_id, target_tenant_id):
         """Копирует глобальные списки из одного тенанта в другой"""
         print(f"\nКопирование глобальных списков из тенанта {source_tenant_id} в {target_tenant_id}...")
         
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         try:
-            self.auth_manager.tenant_id = source_tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+            self.api_client.auth_manager.tenant_id = source_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print("❌ Не удалось переключиться на исходный тенант")
                 return False
             
@@ -511,5 +401,21 @@ class GlobalListsManager:
             
         finally:
             if original_tenant_id:
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+    
+    def _show_global_lists_menu(self):
+        """Меню показа списка глобальных списков"""
+        lists = self.get_global_lists()
+        if lists:
+            print("\nГлобальные списки:")
+            for i, lst in enumerate(lists, 1):
+                print(f"{i}. {lst.get('name', 'Без названия')}")
+                print(f"   ID: {lst.get('id')}")
+                print(f"   Тип: {lst.get('type')}")
+                print(f"   Системный: {'Да' if lst.get('is_system', True) else 'Нет'}")
+                print(f"   Размер: {lst.get('size', 0)}")
+                print(f"   Описание: {lst.get('description', 'Нет описания')}")
+                print()
+        else:
+            print("Не найдено глобальных списков")

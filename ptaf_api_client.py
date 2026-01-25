@@ -1,4 +1,4 @@
-# ptaf_api_client.py (упрощенный)
+# ptaf_api_client.py (обновленный)
 import os
 import json
 import argparse
@@ -6,9 +6,11 @@ from auth import AuthManager
 from tenants import TenantManager
 from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
+from api_client import APIClient  # Новый импорт
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
 from policy_template_manager import PolicyTemplateManager
+from policies_manager import PoliciesManager  # Новый импорт
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
 from roles_manager import RolesManager
@@ -33,18 +35,24 @@ class PTAFClient:
         )
         
         self.base_client = BaseAPIClient(self.auth_manager, debug)
+        
+        # Создаем централизованный API клиент
+        self.api_client = APIClient(self.auth_manager, self.base_client.make_request)
+        
+        # Инициализация менеджеров с API клиентом
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
         self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
         self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
-        self.rules_manager = RulesManager(self.auth_manager, self.base_client.make_request)
-        self.policy_template_manager = PolicyTemplateManager(self.auth_manager, self.base_client.make_request)
-        self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)
+        self.rules_manager = RulesManager(self.api_client)  # Используем api_client
+        self.policy_template_manager = PolicyTemplateManager(self.api_client)  # Используем api_client
+        self.policies_manager = PoliciesManager(self.api_client)  # Новый менеджер
+        self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)  # Пока оставляем старый
         self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
         self.roles_manager = RolesManager(self.auth_manager, self.base_client.make_request)
         self.backends_manager = BackendsManager(self.auth_manager, self.base_client.make_request)
         self.backup_manager = BackupManager(self.auth_manager, self.base_client.make_request)
         self.actions_backup_manager = ActionsBackupManager(self.auth_manager, self.base_client.make_request)
-        self.global_lists_manager = GlobalListsManager(self.auth_manager, self.base_client.make_request)
+        self.global_lists_manager = GlobalListsManager(self.api_client)  # Используем api_client
 
     def load_config(self, config_file):
         try:
@@ -237,9 +245,6 @@ def main():
                     client.export_rules(export_dir)
                 
                 elif choice == '3':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
                     client.manage_policy_templates_extended()
                 
                 elif choice == '4':
@@ -273,9 +278,6 @@ def main():
                     client.manage_tenants()
                 
                 elif choice == '11':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
                     client.manage_global_lists()
                 
                 elif choice == '12':
@@ -287,15 +289,9 @@ def main():
         # Обработка аргументов командной строки
         else:
             if args.global_lists:
-                if not client.select_tenant():
-                    print("Не удалось выбрать тенант")
-                    return
                 client.manage_global_lists()
             
             elif args.policy_template:
-                if not client.select_tenant():
-                    print("Не удалось выбрать тенант")
-                    return
                 client.manage_policy_templates_extended()
             
             elif args.export:
@@ -348,7 +344,10 @@ def main():
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
-        if hasattr(client, 'print_failed_files'):
+        import traceback
+        traceback.print_exc()
+        
+        if 'client' in locals() and hasattr(client, 'print_failed_files'):
             client.print_failed_files()
 
 if __name__ == "__main__":

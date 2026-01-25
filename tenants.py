@@ -1,4 +1,4 @@
-# tenants.py
+# tenants.py (обновленный)
 from urllib.parse import urljoin
 
 class TenantManager:
@@ -67,3 +67,85 @@ class TenantManager:
                     print("Некорректный выбор. Попробуйте снова.")
             except ValueError:
                 print("Пожалуйста, введите число или 'q' для выхода.")
+        return False
+
+    def select_single_tenant(self, prompt="Выберите тенант:"):
+        """Выбирает один тенант и возвращает его данные"""
+        tenants = self.get_available_tenants()
+        if not tenants:
+            print("Не удалось получить список тенантов")
+            return None
+        
+        print(f"\n{prompt}")
+        for i, tenant in enumerate(tenants, 1):
+            name = tenant.get("name", "Без названия")
+            tenant_id = tenant.get("id", "Без ID")
+            print(f"{i}. {name} (ID: {tenant_id})")
+        
+        while True:
+            try:
+                choice = input("\nВыберите номер тенанта (или 'q' для отмены): ")
+                if choice.lower() == 'q':
+                    return None
+                
+                index = int(choice) - 1
+                if 0 <= index < len(tenants):
+                    return tenants[index]
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
+        return None
+
+    def select_source_and_target_tenants(self):
+        """Выбирает исходный и целевой тенанты для копирования"""
+        tenants = self.get_available_tenants()
+        if not tenants:
+            print("Не удалось получить список тенантов")
+            return None, None
+        
+        # Выбор исходного тенанта
+        print("\nВыберите исходный тенант (откуда копировать):")
+        for i, tenant in enumerate(tenants, 1):
+            name = tenant.get("name", "Без названия")
+            tenant_id = tenant.get("id", "Без ID")
+            print(f"{i}. {name} (ID: {tenant_id})")
+        
+        while True:
+            try:
+                choice = input("\nВыберите номер исходного тенанта (или 'q' для отмены): ")
+                if choice.lower() == 'q':
+                    return None, None
+                
+                source_index = int(choice) - 1
+                if 0 <= source_index < len(tenants):
+                    source_tenant = tenants[source_index]
+                    break
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
+        
+        # Выбор целевого тенанта
+        print("\nВыберите целевой тенант (куда копировать):")
+        for i, tenant in enumerate(tenants, 1):
+            name = tenant.get("name", "Без названия")
+            tenant_id = tenant.get("id", "Без ID")
+            print(f"{i}. {name} (ID: {tenant_id})")
+        
+        while True:
+            try:
+                choice = input("\nВыберите номер целевого тенанта (или 'q' для отмены): ")
+                if choice.lower() == 'q':
+                    return None, None
+                
+                target_index = int(choice) - 1
+                if 0 <= target_index < len(tenants):
+                    target_tenant = tenants[target_index]
+                    break
+                else:
+                    print("Некорректный номер")
+            except ValueError:
+                print("Пожалуйста, введите число")
+        
+        return source_tenant, target_tenant

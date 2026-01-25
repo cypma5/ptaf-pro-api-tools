@@ -26,14 +26,45 @@ class BackupManager:
         filename = f"{current_time}-snapshot.json"
         filepath = os.path.join(tenant_dir, filename)
         
+        # Получаем абсолютный путь
+        absolute_filepath = os.path.abspath(filepath)
+        
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(snapshot, f, ensure_ascii=False, indent=2)
-            print(f"Конфигурация сохранена в файл: {filepath}")
-            return filepath
+            print(f"Конфигурация сохранена в файл:")
+            print(f"📁 Полный путь: {absolute_filepath}")
+            return absolute_filepath
         except Exception as e:
             print(f"Ошибка при сохранении конфигурации: {e}")
             return None
+
+def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
+    """Сохраняет бекенды в файл"""
+    # Создаем директорию для тенанта
+    tenant_dir = os.path.join(base_dir, tenant_id)
+    os.makedirs(tenant_dir, exist_ok=True)
+    
+    # Формируем имя файла с датой и временем
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    filename = f"{current_time}-backends.json"
+    filepath = os.path.join(tenant_dir, filename)
+    
+    # Получаем абсолютный путь
+    absolute_filepath = os.path.abspath(filepath)
+    
+    try:
+        # Удаляем ключ traffic_profiles из каждого бекенда
+        cleaned_backends = self.backends_manager._clean_backends_data(backends)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(cleaned_backends, f, ensure_ascii=False, indent=2)
+        print(f"Бекенды сохранены в файл:")
+        print(f"📁 Полный путь: {absolute_filepath}")
+        return absolute_filepath
+    except Exception as e:
+        print(f"Ошибка при сохранении бекендов: {e}")
+        return None
 
     def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
         """Сохраняет бекенды в файл"""

@@ -351,36 +351,18 @@ class SnapshotManager:
         """Копирует бекенды из одного тенанта в другой"""
         print("\nКопирование бекендов между тенантами")
         
-        # Получаем список доступных тенантов
-        tenants = self.get_available_tenants()
-        if not tenants:
-            print("Не удалось получить список тенантов")
+        # Используем TenantManager для выбора тенантов
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.auth_manager, self.make_request)
+        
+        source_tenant, target_tenant = tenant_manager.select_source_and_target_tenants()
+        if not source_tenant or not target_tenant:
+            print("Копирование отменено")
             return False
         
-        # Выбор исходного тенанта
-        print("\nВыберите исходный тенант (откуда копировать):")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        source_index = self.backup_manager._select_index(tenants, "Выберите номер исходного тенанта: ")
-        if source_index is None:
-            return False
-        
-        source_tenant = tenants[source_index]
-        source_tenant_id = source_tenant['id']
+        source_tenant_id = source_tenant.get('id')
         source_tenant_name = source_tenant.get('name', 'Без названия')
-        
-        # Выбор целевого тенанта
-        print(f"\nВыберите целевой тенант (куда копировать):")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        target_index = self.backup_manager._select_index(tenants, "Выберите номер целевого тенанта: ")
-        if target_index is None:
-            return False
-        
-        target_tenant = tenants[target_index]
-        target_tenant_id = target_tenant['id']
+        target_tenant_id = target_tenant.get('id')
         target_tenant_name = target_tenant.get('name', 'Без названия')
         
         if source_tenant_id == target_tenant_id:
