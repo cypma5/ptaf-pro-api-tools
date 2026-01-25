@@ -1,13 +1,13 @@
-# rules_manager.py (упрощенный с ErrorHandler)
+# rules_manager.py (оптимизированный с BaseManager)
 import os
 import json
 import shutil
 import datetime
-from tenants import TenantManager
+from base_manager import BaseManager
 
-class RulesManager:
+class RulesManager(BaseManager):
     def __init__(self, api_client):
-        self.api_client = api_client
+        super().__init__(api_client)
         self.failed_files = []
         self.success_files = []
         self.exported_files = []
@@ -16,7 +16,7 @@ class RulesManager:
     def get_policy_template_id(self):
         """Получает ID первого доступного шаблона политики"""
         response = self.api_client.get_templates_with_user_rules()
-        templates = self.api_client._parse_response_items(response)
+        templates = self._parse_response_items(response)
         if templates and len(templates) > 0:
             return templates[0].get('id')
         return None
@@ -24,7 +24,7 @@ class RulesManager:
     def get_existing_rules(self, template_id):
         """Получает список существующих правил для шаблона"""
         response = self.api_client.get_user_rules(template_id)
-        return self.api_client._parse_response_items(response)
+        return self._parse_response_items(response)
     
     def get_rule_details(self, template_id, rule_id):
         """Получает детали конкретного правила"""
@@ -43,7 +43,8 @@ class RulesManager:
     
     def enable_rule(self, template_id, rule_id, enable=True):
         """Включает или отключает правило"""
-        return self.api_client.enable_user_rule(template_id, rule_id, enable)
+        payload = {"enabled": enable}
+        return self.api_client.update_user_rule(template_id, rule_id, payload)
     
     def delete_rule(self, template_id, rule_id):
         """Удаляет правило"""
@@ -52,7 +53,7 @@ class RulesManager:
     def get_available_actions(self):
         """Получает список доступных действий"""
         response = self.api_client.get_actions()
-        return self.api_client._parse_response_items(response)
+        return self._parse_response_items(response)
     
     def export_single_rule(self, template_id, rule, export_dir):
         """Экспортирует одно правило"""
@@ -92,8 +93,8 @@ class RulesManager:
     
     def export_rules(self, export_dir="exported_rules"):
         """Экспортирует правила"""
-        if not self.api_client.auth_manager.access_token:  # Исправлено
-            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):  # Исправлено
+        if not self.api_client.auth_manager.access_token:
+            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):
                 return False
 
         # Получаем ID шаблона политики
@@ -130,8 +131,8 @@ class RulesManager:
     
     def delete_all_user_rules(self):
         """Удаляет все пользовательские правила из шаблона"""
-        if not self.api_client.auth_manager.access_token:  # Исправлено
-            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):  # Исправлено
+        if not self.api_client.auth_manager.access_token:
+            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):
                 return False
 
         # Получаем ID шаблона политики
@@ -159,8 +160,7 @@ class RulesManager:
         for rule in user_rules:
             print(f"- {rule.get('name', 'Без названия')} (ID: {rule.get('id', 'Без ID')})")
 
-        confirm = input(f"\nВы уверены, что хотите удалить {len(user_rules)} правил? (y/n): ").lower()
-        if confirm != 'y':
+        if not self._confirm_action(f"Вы уверены, что хотите удалить {len(user_rules)} правил?"):
             print("Удаление отменено")
             return False
 
@@ -209,7 +209,7 @@ class RulesManager:
                 
                 current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"Дата и время импорта: {current_time}\n")
-                f.write(f"Тенант ID: {self.api_client.auth_manager.tenant_id}\n\n")  # Исправлено
+                f.write(f"Тенант ID: {self.api_client.auth_manager.tenant_id}\n\n")
                 
                 f.write(f"ИТОГИ:\n")
                 f.write(f"  Успешно импортировано: {success_count}\n")
@@ -487,7 +487,6 @@ class RulesManager:
             if problem_dir:
                 self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
-    
 
     def _move_to_problem_directory(self, file_path, problem_dir, error_reason="", server_response=""):
         """Перемещает файл в problem директорию"""
@@ -532,7 +531,7 @@ class RulesManager:
         self.problem_dir_created = False
         
         # Сохраняем текущий тенант для возможного восстановления
-        original_tenant_id = self.api_client.auth_manager.tenant_id  # Исправлено
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         # Создаем директорию для проблемных файлов
         problem_dir = self._create_problem_directory(directory_path)
@@ -543,7 +542,7 @@ class RulesManager:
             print("Не удалось получить ID шаблона политики")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
@@ -555,7 +554,7 @@ class RulesManager:
             print("Не удалось получить список доступных действий")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
@@ -607,7 +606,7 @@ class RulesManager:
             print("В указанной директории нет .ptafpro файлов")
             # Восстанавливаем исходный тенант
             if original_tenant_id:
-                self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
@@ -636,7 +635,7 @@ class RulesManager:
                 
                 # Восстанавливаем исходный тенант
                 if original_tenant_id:
-                    self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                    self.api_client.auth_manager.tenant_id = original_tenant_id
                     self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                 
                 # Выводим итоговую статистику
@@ -677,7 +676,7 @@ class RulesManager:
                     
                     # Восстанавливаем исходный тенант
                     if original_tenant_id:
-                        self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                        self.api_client.auth_manager.tenant_id = original_tenant_id
                         self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                     
                     # Выводим итоговую статистику
@@ -702,7 +701,7 @@ class RulesManager:
             elif choice == '3':
                 # Восстанавливаем исходный тенант
                 if original_tenant_id:
-                    self.api_client.auth_manager.tenant_id = original_tenant_id  # Исправлено
+                    self.api_client.auth_manager.tenant_id = original_tenant_id
                     self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                 return False
             
@@ -739,7 +738,7 @@ class RulesManager:
             if choice == '1':
                 # Используем TenantManager для выбора тенанта
                 from tenants import TenantManager
-                tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)  # Исправлено
+                tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
                 if not tenant_manager.select_tenant_interactive():
                     print("Не удалось выбрать тенант")
                     continue
@@ -748,14 +747,3 @@ class RulesManager:
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-    
-    def _select_tenant_for_operation(self, operation_name):
-        """Выбирает тенант для операции"""
-        print(f"\n=== {operation_name} ===")
-        print("Выберите тенант для выполнения операции:")
-        
-        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
-        if not tenant_manager.select_tenant_interactive():
-            print("❌ Не удалось выбрать тенант")
-            return False
-        return True

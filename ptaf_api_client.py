@@ -1,4 +1,4 @@
-# ptaf_api_client.py (обновленный)
+# ptaf_api_client.py (полностью обновленный)
 import os
 import json
 import argparse
@@ -6,11 +6,12 @@ from auth import AuthManager
 from tenants import TenantManager
 from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
-from api_client import APIClient  # Новый импорт
+from api_client import APIClient
+from base_manager import BaseManager
 from traffic_settings import TrafficSettingsManager
 from rules_manager import RulesManager
 from policy_template_manager import PolicyTemplateManager
-from policies_manager import PoliciesManager  # Новый импорт
+from policies_manager import PoliciesManager
 from actions_manager import ActionsManager
 from snapshot_manager import SnapshotManager
 from roles_manager import RolesManager
@@ -39,20 +40,23 @@ class PTAFClient:
         # Создаем централизованный API клиент
         self.api_client = APIClient(self.auth_manager, self.base_client.make_request)
         
-        # Инициализация менеджеров с API клиентом
+        # ВСЕ менеджеры теперь используют APIClient и BaseManager
+        self.traffic_settings_manager = TrafficSettingsManager(self.api_client)
+        self.rules_manager = RulesManager(self.api_client)
+        self.policy_template_manager = PolicyTemplateManager(self.api_client)
+        self.policies_manager = PoliciesManager(self.api_client)
+        self.actions_manager = ActionsManager(self.api_client)
+        self.global_lists_manager = GlobalListsManager(self.api_client)
+        self.snapshot_manager = SnapshotManager(self.api_client)
+        self.roles_manager = RolesManager(self.api_client)
+        self.backends_manager = BackendsManager(self.api_client)
+        self.backup_manager = BackupManager(self.api_client)
+        self.actions_backup_manager = ActionsBackupManager(self.api_client)
+        
+        # TenantManager и TenantExtendedManager остаются со старым интерфейсом,
+        # так как они работают непосредственно с AuthManager
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
         self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
-        self.traffic_settings_manager = TrafficSettingsManager(self.auth_manager, self.base_client.make_request)
-        self.rules_manager = RulesManager(self.api_client)  # Используем api_client
-        self.policy_template_manager = PolicyTemplateManager(self.api_client)  # Используем api_client
-        self.policies_manager = PoliciesManager(self.api_client)  # Новый менеджер
-        self.actions_manager = ActionsManager(self.auth_manager, self.base_client.make_request)  # Пока оставляем старый
-        self.snapshot_manager = SnapshotManager(self.auth_manager, self.base_client.make_request)
-        self.roles_manager = RolesManager(self.auth_manager, self.base_client.make_request)
-        self.backends_manager = BackendsManager(self.auth_manager, self.base_client.make_request)
-        self.backup_manager = BackupManager(self.auth_manager, self.base_client.make_request)
-        self.actions_backup_manager = ActionsBackupManager(self.auth_manager, self.base_client.make_request)
-        self.global_lists_manager = GlobalListsManager(self.api_client)  # Используем api_client
 
     def load_config(self, config_file):
         try:
@@ -182,7 +186,7 @@ def main():
     parser.add_argument(
         "--global-lists",
         action="store_true",
-        help="Управление глобальными списками"
+        help="Управление глобальных списков"
     )
     parser.add_argument(
         "--config",

@@ -1,19 +1,20 @@
-# backup_manager.py (обновленный)
+# backup_manager.py (оптимизированный с BaseManager)
 import os
 import json
 import datetime
-from urllib.parse import urljoin
+from base_manager import BaseManager
 
-class BackupManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
+class BackupManager(BaseManager):
+    def __init__(self, api_client):
+        super().__init__(api_client)
+        # Инициализируем другие менеджеры
         from backends_manager import BackendsManager
         from roles_manager import RolesManager
         from actions_backup_manager import ActionsBackupManager
-        self.backends_manager = BackendsManager(auth_manager, make_request_func)
-        self.roles_manager = RolesManager(auth_manager, make_request_func)
-        self.actions_backup_manager = ActionsBackupManager(auth_manager, make_request_func)
+        
+        self.backends_manager = BackendsManager(api_client)
+        self.roles_manager = RolesManager(api_client)
+        self.actions_backup_manager = ActionsBackupManager(api_client)
 
     def save_snapshot_to_file(self, snapshot, tenant_id, base_dir="snapshot"):
         """Сохраняет конфигурацию в файл"""
@@ -38,34 +39,7 @@ class BackupManager:
         except Exception as e:
             print(f"Ошибка при сохранении конфигурации: {e}")
             return None
-
-def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
-    """Сохраняет бекенды в файл"""
-    # Создаем директорию для тенанта
-    tenant_dir = os.path.join(base_dir, tenant_id)
-    os.makedirs(tenant_dir, exist_ok=True)
     
-    # Формируем имя файла с датой и временем
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    filename = f"{current_time}-backends.json"
-    filepath = os.path.join(tenant_dir, filename)
-    
-    # Получаем абсолютный путь
-    absolute_filepath = os.path.abspath(filepath)
-    
-    try:
-        # Удаляем ключ traffic_profiles из каждого бекенда
-        cleaned_backends = self.backends_manager._clean_backends_data(backends)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(cleaned_backends, f, ensure_ascii=False, indent=2)
-        print(f"Бекенды сохранены в файл:")
-        print(f"📁 Полный путь: {absolute_filepath}")
-        return absolute_filepath
-    except Exception as e:
-        print(f"Ошибка при сохранении бекендов: {e}")
-        return None
-
     def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
         """Сохраняет бекенды в файл"""
         # Создаем директорию для тенанта
@@ -77,14 +51,18 @@ def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
         filename = f"{current_time}-backends.json"
         filepath = os.path.join(tenant_dir, filename)
         
+        # Получаем абсолютный путь
+        absolute_filepath = os.path.abspath(filepath)
+        
         try:
             # Удаляем ключ traffic_profiles из каждого бекенда
             cleaned_backends = self.backends_manager._clean_backends_data(backends)
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(cleaned_backends, f, ensure_ascii=False, indent=2)
-            print(f"Бекенды сохранены в файл: {filepath}")
-            return filepath
+            print(f"Бекенды сохранены в файл:")
+            print(f"📁 Полный путь: {absolute_filepath}")
+            return absolute_filepath
         except Exception as e:
             print(f"Ошибка при сохранении бекендов: {e}")
             return None
@@ -101,7 +79,7 @@ def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
         filepath = os.path.join(tenant_dir, filename)
         
         try:
-            # Очищаем данные ролей (удаляем ID и другие системные поля)
+            # Очищаем данные ролей
             cleaned_roles = self._clean_roles_data(roles)
             
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -186,37 +164,9 @@ def save_backends_to_file(self, backends, tenant_id, base_dir="snapshot"):
         return backends_files[0][0]
 
     def _select_index(self, items, prompt):
-        """Выбор индекса из списка"""
-        while True:
-            try:
-                choice = input(prompt).strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(items):
-                    return index
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
+        """Выбор индекса из списка (переопределяем для совместимости)"""
+        return super()._select_index(items, prompt)
 
     def _select_multiple_indices(self, items, prompt):
-        """Выбор нескольких индексов из списка"""
-        while True:
-            try:
-                choice = input(prompt).strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                indices = [int(num.strip()) - 1 for num in choice.split(',') if num.strip().isdigit()]
-                valid_indices = [i for i in indices if 0 <= i < len(items)]
-                
-                if not valid_indices:
-                    print("Некорректные номера")
-                    continue
-                
-                return valid_indices
-                
-            except ValueError:
-                print("Пожалуйста, введите номера через запятую (например: 1,2,3)")
+        """Выбор нескольких индексов из списка (переопределяем для совместимости)"""
+        return super()._select_multiple_indices(items, prompt)

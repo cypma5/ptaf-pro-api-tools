@@ -1,89 +1,48 @@
-# snapshot_manager.py
+# snapshot_manager.py (оптимизированный с BaseManager)
 import os
 import json
-from urllib.parse import urljoin
+from base_manager import BaseManager
 
-class SnapshotManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
+class SnapshotManager(BaseManager):
+    def __init__(self, api_client):
+        super().__init__(api_client)
         from backup_manager import BackupManager
-        self.backup_manager = BackupManager(auth_manager, make_request_func)
-
+        self.backup_manager = BackupManager(api_client)
+    
     def get_tenant_snapshot(self, tenant_id=None):
         """Получает конфигурацию тенанта"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        # Если указан tenant_id, обновляем токен для этого тенанта
-        if tenant_id and tenant_id != self.auth_manager.tenant_id:
-            original_tenant_id = self.auth_manager.tenant_id
-            self.auth_manager.tenant_id = tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        if tenant_id and tenant_id != self.api_client.auth_manager.tenant_id:
+            original_tenant_id = self.api_client.auth_manager.tenant_id
+            self.api_client.auth_manager.tenant_id = tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print(f"Не удалось переключиться на тенант {tenant_id}")
-                self.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 return None
         
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/snapshot")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            snapshot = response.json()
+        response = self.api_client.get_snapshot()
+        if response and response.status_code == 200:
             print("Успешно получена конфигурация тенанта")
-            return snapshot
+            return response.json()
         else:
-            print(f"Ошибка при получении конфигурации. Код: {response.status_code}, Ответ: {response.text}")
+            print(f"Ошибка при получении конфигурации")
             return None
-
+    
     def get_available_tenants(self):
         """Получает список доступных тенантов"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/auth/account/tenants")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-                
-        if response.status_code == 200:
-            tenants = response.json()
-            if isinstance(tenants, dict) and 'items' in tenants:
-                return tenants['items']
-            elif isinstance(tenants, list):
-                return tenants
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(tenants)}")
-                return None
-        else:
-            print(f"Ошибка при получении списка тенантов. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_tenants()
+        return self._parse_response_items(response)
+    
     def get_single_tenant_snapshot(self, tenant_id=None):
         """Получает конфигурацию выбранного тенанта"""
         if not tenant_id:
-            # Если tenant_id не указан, запрашиваем выбор
-            tenants = self.get_available_tenants()
-            if not tenants:
-                print("Не удалось получить список тенантов")
+            # Используем TenantManager для выбора
+            from tenants import TenantManager
+            tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+            tenant = tenant_manager.select_single_tenant("Выберите тенант для получения конфигурации:")
+            if not tenant:
                 return False
-            
-            print("\nВыберите тенант для получения конфигурации:")
-            for i, tenant in enumerate(tenants, 1):
-                print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-            
-            tenant_index = self.backup_manager._select_index(tenants, "Выберите номер тенанта: ")
-            if tenant_index is None:
-                return False
-            
-            selected_tenant = tenants[tenant_index]
-            tenant_id = selected_tenant['id']
-            tenant_name = selected_tenant.get('name', 'Без названия')
+            tenant_id = tenant.get('id')
+            tenant_name = tenant.get('name', 'Без названия')
             print(f"\nПолучение конфигурации тенанта {tenant_name} (ID: {tenant_id})...")
         
         # Получаем конфигурацию
@@ -94,17 +53,17 @@ class SnapshotManager:
         
         # Получаем бекенды
         from backends_manager import BackendsManager
-        backends_manager = BackendsManager(self.auth_manager, self.make_request)
+        backends_manager = BackendsManager(self.api_client)
         backends = backends_manager.get_tenant_backends(tenant_id)
         
         # Получаем роли
         from roles_manager import RolesManager
-        roles_manager = RolesManager(self.auth_manager, self.make_request)
+        roles_manager = RolesManager(self.api_client)
         roles = roles_manager.get_roles()
         
         # Получаем пользовательские действия
         from actions_backup_manager import ActionsBackupManager
-        actions_manager = ActionsBackupManager(self.auth_manager, self.make_request)
+        actions_manager = ActionsBackupManager(self.api_client)
         custom_actions = actions_manager.get_custom_actions()
         
         # Сохраняем в файлы
@@ -130,13 +89,13 @@ class SnapshotManager:
         else:
             print("Не удалось сохранить основные данные")
             return False
-
+    
     def get_all_tenants_snapshots(self):
         """Получает конфигурации со всех доступных тенантов"""
         print("\nПолучение конфигураций со всех доступных тенантов...")
         
         # Сохраняем текущий тенант
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         # Получаем список всех тенантов
         tenants = self.get_available_tenants()
@@ -158,17 +117,17 @@ class SnapshotManager:
             if snapshot:
                 # Получаем бекенды тенанта
                 from backends_manager import BackendsManager
-                backends_manager = BackendsManager(self.auth_manager, self.make_request)
+                backends_manager = BackendsManager(self.api_client)
                 backends = backends_manager.get_tenant_backends(tenant_id)
                 
                 # Получаем роли тенанта
                 from roles_manager import RolesManager
-                roles_manager = RolesManager(self.auth_manager, self.make_request)
+                roles_manager = RolesManager(self.api_client)
                 roles = roles_manager.get_roles()
                 
                 # Получаем пользовательские действия
                 from actions_backup_manager import ActionsBackupManager
-                actions_manager = ActionsBackupManager(self.auth_manager, self.make_request)
+                actions_manager = ActionsBackupManager(self.api_client)
                 custom_actions = actions_manager.get_custom_actions()
                 
                 # Сохраняем в файлы
@@ -201,24 +160,24 @@ class SnapshotManager:
         
         # Восстанавливаем оригинальный тенант
         if original_tenant_id:
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
         
         print(f"\nИтог: успешно обработано {success_count} из {total_tenants} тенантов")
         return success_count > 0
-
+    
     def restore_security_config(self):
         """Восстанавливает конфигурацию безопасности из снапшота"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
+        if not self.api_client.auth_manager.access_token:
+            if not self.api_client.auth_manager.get_jwt_tokens(self.api_client.make_request):
                 return False
         
-        if not self.auth_manager.tenant_id:
+        if not self.api_client.auth_manager.tenant_id:
             print("Сначала выберите тенант")
             return False
         
         # Поиск доступных снапшотов
-        snapshot_files = self.backup_manager._find_available_snapshots(self.auth_manager.tenant_id)
+        snapshot_files = self.backup_manager._find_available_snapshots(self.api_client.auth_manager.tenant_id)
         if not snapshot_files:
             print("Не найдены файлы снапшотов для восстановления")
             return False
@@ -227,7 +186,7 @@ class SnapshotManager:
         for i, (filepath, timestamp) in enumerate(snapshot_files, 1):
             print(f"{i}. {timestamp} - {os.path.basename(filepath)}")
         
-        snapshot_index = self.backup_manager._select_index(snapshot_files, "Выберите номер снапшота для восстановления: ")
+        snapshot_index = self._select_index(snapshot_files, "Выберите номер снапшота для восстановления: ")
         if snapshot_index is None:
             return False
         
@@ -247,8 +206,7 @@ class SnapshotManager:
         
         # Подтверждение
         print("\nВНИМАНИЕ: Восстановление конфигурации безопасности перезапишет текущую конфигурацию!")
-        confirm = input("Вы уверены, что хотите восстановить конфигурацию безопасности? (y/n): ").lower()
-        if confirm != 'y':
+        if not self._confirm_action("Вы уверены, что хотите восстановить конфигурацию безопасности?"):
             print("Восстановление отменено")
             return False
         
@@ -261,14 +219,12 @@ class SnapshotManager:
             error_msg = response.text if response else "Неизвестная ошибка"
             print(f"Ошибка при восстановлении конфигурации: {error_msg}")
             return False
-
+    
     def _restore_snapshot(self, snapshot_data):
         """Восстанавливает конфигурацию из снапшота"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/snapshot")
-        
-        response = self.make_request("POST", url, json=snapshot_data)
+        response = self.api_client.restore_snapshot(snapshot_data)
         return response
-
+    
     def manage_snapshots(self):
         """Управление получением конфигураций"""
         while True:
@@ -281,10 +237,10 @@ class SnapshotManager:
             choice = input("\nВыберите действие (1-4): ")
             
             if choice == '1':
-                if not self.auth_manager.tenant_id:
+                if not self.api_client.auth_manager.tenant_id:
                     print("Сначала выберите тенант")
                     continue
-                self.get_single_tenant_snapshot(self.auth_manager.tenant_id)
+                self.get_single_tenant_snapshot(self.api_client.auth_manager.tenant_id)
             
             elif choice == '2':
                 self.get_single_tenant_snapshot()
@@ -297,7 +253,7 @@ class SnapshotManager:
             
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def manage_restore(self):
         """Управление восстановлением конфигураций"""
         while True:
@@ -308,7 +264,7 @@ class SnapshotManager:
             choice = input("\nВыберите действие (1-2): ")
             
             if choice == '1':
-                if not self.auth_manager.tenant_id:
+                if not self.api_client.auth_manager.tenant_id:
                     print("Сначала выберите тенант")
                     continue
                 self.restore_security_config()
@@ -318,11 +274,11 @@ class SnapshotManager:
             
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def get_snapshots_from_cli(self):
         """Получает конфигурации со всех тенантов (для вызова из CLI)"""
         return self.get_all_tenants_snapshots()
-
+    
     def manage_tenant_transfer(self):
         """Управление переносом объектов между тенантами"""
         while True:
@@ -338,7 +294,7 @@ class SnapshotManager:
                 self.copy_backends_to_another_tenant()
             elif choice == '2':
                 from roles_manager import RolesManager
-                roles_manager = RolesManager(self.auth_manager, self.make_request)
+                roles_manager = RolesManager(self.api_client)
                 roles_manager.copy_roles_to_another_tenant()
             elif choice == '3':
                 self.copy_custom_actions_to_another_tenant()
@@ -346,14 +302,14 @@ class SnapshotManager:
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def copy_backends_to_another_tenant(self):
         """Копирует бекенды из одного тенанта в другой"""
         print("\nКопирование бекендов между тенантами")
         
         # Используем TenantManager для выбора тенантов
         from tenants import TenantManager
-        tenant_manager = TenantManager(self.auth_manager, self.make_request)
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
         
         source_tenant, target_tenant = tenant_manager.select_source_and_target_tenants()
         if not source_tenant or not target_tenant:
@@ -372,22 +328,22 @@ class SnapshotManager:
         print(f"\nКопирование бекендов из '{source_tenant_name}' в '{target_tenant_name}'")
         
         # Получаем бекенды из исходного тенанта
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         # Переключаемся на исходный тенант
-        self.auth_manager.tenant_id = source_tenant_id
-        if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        self.api_client.auth_manager.tenant_id = source_tenant_id
+        if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
             print(f"Не удалось переключиться на исходный тенант {source_tenant_id}")
-            self.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.tenant_id = original_tenant_id
             return False
         
         from backends_manager import BackendsManager
-        backends_manager = BackendsManager(self.auth_manager, self.make_request)
+        backends_manager = BackendsManager(self.api_client)
         backends = backends_manager.get_tenant_backends()
         if not backends:
             print("Не удалось получить бекенды из исходного тенанта")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Очищаем данные бекендов
@@ -398,32 +354,32 @@ class SnapshotManager:
             backends_list = cleaned_backends
         else:
             print("Неподдерживаемый формат бекендов")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         if not backends_list:
             print("В исходном тенанте нет бекендов для копирования")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         print(f"Найдено {len(backends_list)} бекендов для копирования")
         
         # Подтверждение
-        confirm = input(f"\nВы уверены, что хотите скопировать {len(backends_list)} бекендов из '{source_tenant_name}' в '{target_tenant_name}'? (y/n): ").lower()
-        if confirm != 'y':
+        confirm_msg = f"Вы уверены, что хотите скопировать {len(backends_list)} бекендов из '{source_tenant_name}' в '{target_tenant_name}'?"
+        if not self._confirm_action(confirm_msg):
             print("Копирование отменено")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Переключаемся на целевой тенант
-        self.auth_manager.tenant_id = target_tenant_id
-        if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        self.api_client.auth_manager.tenant_id = target_tenant_id
+        if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
             print(f"Не удалось переключиться на целевой тенант {target_tenant_id}")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Копируем каждый бекенд
@@ -455,8 +411,8 @@ class SnapshotManager:
                 error_count += 1
         
         # Восстанавливаем оригинальный тенант
-        self.auth_manager.tenant_id = original_tenant_id
-        self.auth_manager.update_jwt_with_tenant(self.make_request)
+        self.api_client.auth_manager.tenant_id = original_tenant_id
+        self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
         
         print(f"\nИтог копирования:")
         print(f"Успешно скопировано: {success_count}")
@@ -465,7 +421,7 @@ class SnapshotManager:
         print(f"Всего бекендов: {total_backends}")
         
         return success_count > 0
-
+    
     def copy_custom_actions_to_another_tenant(self):
         """Копирует пользовательские действия из одного тенанта в другой"""
         print("\nКопирование пользовательских действий между тенантами")
@@ -478,27 +434,19 @@ class SnapshotManager:
         
         # Выбор исходного тенанта
         print("\nВыберите исходный тенант (откуда копировать):")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        source_index = self.backup_manager._select_index(tenants, "Выберите номер исходного тенанта: ")
-        if source_index is None:
+        source_tenant = self._select_item_from_list(tenants, "Выберите исходный тенант")
+        if not source_tenant:
             return False
         
-        source_tenant = tenants[source_index]
         source_tenant_id = source_tenant['id']
         source_tenant_name = source_tenant.get('name', 'Без названия')
         
         # Выбор целевого тенанта
         print(f"\nВыберите целевой тенант (куда копировать):")
-        for i, tenant in enumerate(tenants, 1):
-            print(f"{i}. {tenant.get('name', 'Без названия')} (ID: {tenant.get('id')})")
-        
-        target_index = self.backup_manager._select_index(tenants, "Выберите номер целевого тенанта: ")
-        if target_index is None:
+        target_tenant = self._select_item_from_list(tenants, "Выберите целевой тенант")
+        if not target_tenant:
             return False
         
-        target_tenant = tenants[target_index]
         target_tenant_id = target_tenant['id']
         target_tenant_name = target_tenant.get('name', 'Без названия')
         
@@ -509,22 +457,22 @@ class SnapshotManager:
         print(f"\nКопирование пользовательских действий из '{source_tenant_name}' в '{target_tenant_name}'")
         
         # Получаем пользовательские действия из исходного тенанта
-        original_tenant_id = self.auth_manager.tenant_id
+        original_tenant_id = self.api_client.auth_manager.tenant_id
         
         # Переключаемся на исходный тенант
-        self.auth_manager.tenant_id = source_tenant_id
-        if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        self.api_client.auth_manager.tenant_id = source_tenant_id
+        if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
             print(f"Не удалось переключиться на исходный тенант {source_tenant_id}")
-            self.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.tenant_id = original_tenant_id
             return False
         
         from actions_backup_manager import ActionsBackupManager
-        actions_manager = ActionsBackupManager(self.auth_manager, self.make_request)
+        actions_manager = ActionsBackupManager(self.api_client)
         custom_actions = actions_manager.get_custom_actions()
         if not custom_actions:
             print("Не найдено пользовательских действий для копирования")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         print(f"\nНайдено {len(custom_actions)} пользовательских действий:")
@@ -545,32 +493,32 @@ class SnapshotManager:
             print("Будут скопированы все пользовательские действия")
         elif choice == '2':
             # Выбор конкретных действий
-            action_indices = self.backup_manager._select_multiple_indices(custom_actions, "Выберите номера действий для копирования (через запятую): ")
+            action_indices = self._select_multiple_indices(custom_actions, "Выберите номера действий для копирования (через запятую): ")
             if not action_indices:
                 print("Не выбрано ни одного действия")
-                self.auth_manager.tenant_id = original_tenant_id
-                self.auth_manager.update_jwt_with_tenant(self.make_request)
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
                 return False
             actions_to_copy = [custom_actions[i].get('name') for i in action_indices]
             print(f"Выбрано {len(actions_to_copy)} действий для копирования")
         elif choice == '3':
             print("Копирование отменено")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         else:
             print("Некорректный выбор")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Подтверждение
         action_count = len(custom_actions) if actions_to_copy == "all" else len(actions_to_copy)
-        confirm = input(f"\nВы уверены, что хотите скопировать {action_count} действий из '{source_tenant_name}' в '{target_tenant_name}'? (y/n): ").lower()
-        if confirm != 'y':
+        confirm_msg = f"Вы уверены, что хотите скопировать {action_count} действий из '{source_tenant_name}' в '{target_tenant_name}'?"
+        if not self._confirm_action(confirm_msg):
             print("Копирование отменено")
-            self.auth_manager.tenant_id = original_tenant_id
-            self.auth_manager.update_jwt_with_tenant(self.make_request)
+            self.api_client.auth_manager.tenant_id = original_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
             return False
         
         # Выполняем копирование
