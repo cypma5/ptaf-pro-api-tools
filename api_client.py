@@ -284,25 +284,46 @@ class APIClient:
             operation_name=f"Создание пользовательского правила в шаблоне {template_id}"
         )
     
+    def get_policy_user_rules_in_template(self, template_id):
+        """Получить пользовательские правила внутри обычного шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/user_rules",
+            operation_name=f"Получение пользовательских правил в шаблоне {template_id}"
+        )
+
+    def get_policy_user_rule_details_in_template(self, template_id, rule_id):
+        """Получить детали пользовательского правила внутри обычного шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/user_rules/{rule_id}",
+            operation_name=f"Получение деталей пользовательского правила {rule_id} в шаблоне"
+        )
+
+    def update_policy_user_rule_in_template(self, template_id, rule_id, update_data):
+        """Обновить пользовательское правило внутри обычного шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH", f"config/policies/templates/user/{template_id}/user_rules/{rule_id}", json=update_data,
+            operation_name=f"Обновление пользовательского правила {rule_id} в шаблоне"
+        )
+
     def get_user_rules(self, template_id):
-        """Получить пользовательские правила шаблона"""
+        """Получить правила из набора пользовательских правил"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/with_user_rules/{template_id}/rules",
-            operation_name=f"Получение пользовательских правил шаблона {template_id}"
+            operation_name=f"Получение правил из набора пользовательских правил {template_id}"
         )
     
     def get_user_rule_details(self, template_id, rule_id):
-        """Получить детали пользовательского правила"""
+        """Получить детали правила из набора пользовательских правил"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}",
-            operation_name=f"Получение деталей пользовательского правила {rule_id}"
+            operation_name=f"Получение деталей правила {rule_id} из набора пользовательских правил"
         )
     
     def update_user_rule(self, template_id, rule_id, update_data):
-        """Обновить пользовательское правило"""
+        """Обновить правило в наборе пользовательских правил"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "PATCH", f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}", json=update_data,
-            operation_name=f"Обновление пользовательского правила {rule_id}"
+            operation_name=f"Обновление правила {rule_id} в наборе пользовательских правил"
         )
     
     def delete_user_rule(self, template_id, rule_id):

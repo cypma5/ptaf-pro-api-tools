@@ -1,4 +1,3 @@
-# policy_template_manager.py (исправленный для пользовательских правил)
 import os
 import json
 import datetime
@@ -18,87 +17,99 @@ class PolicyTemplateManager(BaseManager):
         return self._parse_response_items(response)
     
     def get_user_templates(self):
-        """Получает список пользовательских шаблонов"""
+        """Получает список пользовательских шаблонов (обычных)"""
         response = self.api_client.get_user_templates()
         return self._parse_response_items(response)
     
     def get_templates_with_user_rules(self):
-        """Получает список шаблонов с пользовательскими правилами"""
+        """Получает список наборов пользовательских правил"""
         response = self.api_client.get_templates_with_user_rules()
         return self._parse_response_items(response)
     
-    def get_template_details(self, template_id):
+    def get_template_details(self, template_id, is_user_rules_template=False):
         """Получает детали шаблона"""
-        response = self.api_client.get_template_details(template_id)
-        if response and response.status_code == 200:
-            return response.json()
+        if is_user_rules_template:
+            # Для набора пользовательских правил - нужно использовать другой endpoint
+            # В текущем API может не быть отдельного метода, используем базовый
+            print(f"⚠️ Получение деталей набора пользовательских правил может потребовать отдельного метода")
+            return None
+        else:
+            response = self.api_client.get_template_details(template_id)
+            if response and response.status_code == 200:
+                return response.json()
         return None
     
-    def get_template_rules(self, template_id):
-        """Получает список ВСЕХ правил шаблона (системные + пользовательские)"""
+    def get_template_rules(self, template_id, template_type='user'):
+        """Получает список ВСЕХ правил шаблона"""
+        if template_type == 'with_user_rules':
+            # Это набор пользовательских правил
+            return self.get_user_rules_template_rules(template_id)
+        else:
+            # Это обычный шаблон
+            return self.get_regular_template_rules(template_id)
+    
+    def get_regular_template_rules(self, template_id):
+        """Получает все правила обычного шаблона (системные + пользовательские внутри)"""
         # Получаем системные правила
         system_rules_response = self.api_client.get_template_rules(template_id)
         system_rules = self._parse_response_items(system_rules_response) or []
         
-        # Получаем пользовательские правила, если шаблон их поддерживает
+        # Проверяем, есть ли у шаблона пользовательские правила
         template_details = self.get_template_details(template_id)
         user_rules = []
         
         if template_details and template_details.get('has_user_rules', False):
-            # Получаем пользовательские правила
-            user_rules_response = self.api_client.get_user_rules(template_id)
+            # Получаем пользовательские правила внутри шаблона
+            user_rules_response = self.api_client.get_policy_user_rules_in_template(template_id)
             user_rules = self._parse_response_items(user_rules_response) or []
             
             # Помечаем пользовательские правила
             for rule in user_rules:
                 rule['is_user_rule'] = True
+                rule['template_type'] = 'user'  # Обычный шаблон с user_rules
         
         # Объединяем правила
         all_rules = system_rules + user_rules
         return all_rules
     
-    def get_template_system_rules(self, template_id):
-        """Получает только системные правила шаблона"""
-        response = self.api_client.get_template_rules(template_id)
-        return self._parse_response_items(response)
-    
-    def get_template_user_rules(self, template_id):
-        """Получает только пользовательские правила шаблона"""
-        template_details = self.get_template_details(template_id)
-        if not template_details or not template_details.get('has_user_rules', False):
-            return []
-        
+    def get_user_rules_template_rules(self, template_id):
+        """Получает правила из набора пользовательских правил"""
         response = self.api_client.get_user_rules(template_id)
         rules = self._parse_response_items(response) or []
         
-        # Помечаем пользовательские правила
+        # Помечаем как пользовательские правила из набора
         for rule in rules:
             rule['is_user_rule'] = True
+            rule['template_type'] = 'with_user_rules'  # Набор пользовательских правил
+            rule['is_user_rules_template'] = True
         
         return rules
     
-    def get_rule_details(self, template_id, rule_id, is_user_rule=False):
+    def get_rule_details(self, template_id, rule_id, template_type='user', is_user_rule=False):
         """Получает детали конкретного правила"""
-        if is_user_rule:
-            # Для пользовательских правил
+        if template_type == 'with_user_rules':
+            # Это набор пользовательских правил
             response = self.api_client.get_user_rule_details(template_id, rule_id)
+        elif is_user_rule:
+            # Это пользовательское правило внутри обычного шаблона
+            response = self.api_client.get_policy_user_rule_details_in_template(template_id, rule_id)
         else:
-            # Для системных правил
+            # Это системное правило внутри обычного шаблона
             response = self.api_client.get_template_rule_details(template_id, rule_id)
         
         if response and response.status_code == 200:
-            return response.json()
+            rule_data = response.json()
+            # Добавляем метаданные о типе
+            rule_data['template_type'] = template_type
+            rule_data['is_user_rule'] = is_user_rule
+            return rule_data
+        
         return None
     
-    def get_rule_aggregation(self, template_id, rule_id, is_user_rule=False):
+    def get_rule_aggregation(self, template_id, rule_id, template_type='user', is_user_rule=False):
         """Получает настройки агрегации правила"""
-        if is_user_rule:
-            # Для пользовательских правил - агрегация через тот же endpoint?
-            # Проверим структуру API
-            print(f"  ⚠️ Получение агрегации для пользовательского правила не поддерживается в текущем API")
-            return None
-        else:
-            # Для системных правил
+        # Агрегация обычно только для системных правил
+        if template_type == 'user' and not is_user_rule:
             response = self.api_client.get_template_rule_aggregation(template_id, rule_id)
             if response and response.status_code == 200:
                 return response.json()
@@ -111,8 +122,13 @@ class PolicyTemplateManager(BaseManager):
     
     # ==================== СОЗДАНИЕ И ОБНОВЛЕНИЕ ====================
     
-    def create_template(self, name, vendor_template_ids, has_user_rules=False):
+    def create_template(self, name, vendor_template_ids, has_user_rules=False, template_type='user'):
         """Создает новый шаблон"""
+        if template_type == 'with_user_rules':
+            # Создание набора пользовательских правил
+            print("⚠️ Создание набора пользовательских правил не поддерживается в текущем API")
+            return None
+        
         payload = {
             "name": name,
             "has_user_rules": has_user_rules,
@@ -123,31 +139,31 @@ class PolicyTemplateManager(BaseManager):
             return response.json()
         return None
     
-    def update_rule(self, template_id, rule_id, update_data, is_user_rule=False):
+    def update_rule(self, template_id, rule_id, update_data, template_type='user', is_user_rule=False):
         """Обновляет правило"""
-        if is_user_rule:
-            # Для пользовательских правил
+        if template_type == 'with_user_rules':
+            # Это набор пользовательских правил
             return self.api_client.update_user_rule(template_id, rule_id, update_data)
+        elif is_user_rule:
+            # Это пользовательское правило внутри обычного шаблона
+            return self.api_client.update_policy_user_rule_in_template(template_id, rule_id, update_data)
         else:
-            # Для системных правил
+            # Это системное правило внутри обычного шаблона
             return self.api_client.update_template_rule(template_id, rule_id, update_data)
     
-    def update_rule_aggregation(self, template_id, rule_id, aggregation_data, is_user_rule=False):
+    def update_rule_aggregation(self, template_id, rule_id, aggregation_data, template_type='user', is_user_rule=False):
         """Обновляет настройки агрегации правила"""
-        if is_user_rule:
-            # Для пользовательских правил - агрегация не поддерживается?
-            print(f"  ⚠️ Обновление агрегации для пользовательского правила не поддерживается")
-            return None
-        else:
-            # Для системных правил
+        # Агрегация обычно только для системных правил
+        if template_type == 'user' and not is_user_rule:
             return self.api_client.update_template_rule_aggregation(template_id, rule_id, aggregation_data)
+        return None
     
     # ==================== ЭКСПОРТ/ИМПОРТ ====================
     
-    def _get_filtered_rules_with_details(self, template_id):
+    def _get_filtered_rules_with_details(self, template_id, template_type='user'):
         """Получает только измененные правила"""
         print("Получение правил шаблона...")
-        rules = self.get_template_rules(template_id)  # Получаем все правила
+        rules = self.get_template_rules(template_id, template_type)
         if rules is None:
             return []
         
@@ -156,33 +172,38 @@ class PolicyTemplateManager(BaseManager):
             # Проверяем, есть ли изменения в правиле
             has_overrides = rule.get('has_overrides', False)
             is_user_rule = rule.get('is_user_rule', False)
+            is_user_rules_template = rule.get('is_user_rules_template', False)
             
             # Для пользовательских правил всегда считаем их измененными
             if is_user_rule or has_overrides:
                 modified_rules.append(rule)
         
         print(f"Найдено {len(modified_rules)} измененных правил из {len(rules)} всего")
-        print(f"  - Пользовательских правил: {len([r for r in modified_rules if r.get('is_user_rule')])}")
-        print(f"  - Системных правил с изменениями: {len([r for r in modified_rules if not r.get('is_user_rule')])}")
         
         full_rules_data = []
         for i, rule in enumerate(modified_rules, 1):
             rule_id = rule.get('id')
             rule_name = rule.get('name', f'Правило {i}')
             is_user_rule = rule.get('is_user_rule', False)
+            template_type = rule.get('template_type', 'user')
             
-            print(f"  [{i}/{len(modified_rules)}] Получение деталей: {rule_name} ({'пользовательское' if is_user_rule else 'системное'})")
+            rule_type = "пользовательское" if is_user_rule else "системное"
+            if template_type == 'with_user_rules':
+                rule_type += " (из набора пользовательских правил)"
             
-            rule_details = self.get_rule_details(template_id, rule_id, is_user_rule)
+            print(f"  [{i}/{len(modified_rules)}] Получение деталей: {rule_name} ({rule_type})")
+            
+            rule_details = self.get_rule_details(template_id, rule_id, template_type, is_user_rule)
             if rule_details:
                 # Сохраняем информацию о типе правила
                 rule_details['is_user_rule'] = is_user_rule
+                rule_details['template_type'] = template_type
                 rule_details['original_rule_id'] = rule.get('rule_id')  # Это system rule_id для системных правил
                 rule_details['original_rule_name'] = rule_name
                 
                 # Для системных правил получаем агрегацию
-                if not is_user_rule:
-                    aggregation_data = self.get_rule_aggregation(template_id, rule_id, is_user_rule)
+                if template_type == 'user' and not is_user_rule:
+                    aggregation_data = self.get_rule_aggregation(template_id, rule_id, template_type, is_user_rule)
                     if aggregation_data:
                         rule_details['aggregation'] = aggregation_data
                 
@@ -190,21 +211,34 @@ class PolicyTemplateManager(BaseManager):
         
         return full_rules_data
     
-    def export_template(self, template_id, export_dir="templates_export"):
+    def export_template(self, template_id, export_dir="templates_export", template_type='user'):
         """Экспортирует шаблон"""
         print(f"\nЭкспорт шаблона политики ID: {template_id}")
         
-        template_details = self.get_template_details(template_id)
-        if not template_details:
-            print("Не удалось получить детали шаблона")
+        # Получаем информацию о шаблоне
+        template_info = None
+        if template_type == 'user':
+            template_info = self.get_template_details(template_id)
+        else:
+            # Для набора пользовательских правил получаем базовую информацию
+            templates = self.get_templates_with_user_rules()
+            if templates:
+                for tmpl in templates:
+                    if tmpl.get('id') == template_id:
+                        template_info = tmpl
+                        break
+        
+        if not template_info:
+            print("Не удалось получить информацию о шаблоне")
             return None
         
-        modified_rules_data = self._get_filtered_rules_with_details(template_id)
+        modified_rules_data = self._get_filtered_rules_with_details(template_id, template_type)
         
         if not modified_rules_data:
             print("⚠️ В шаблоне нет измененных правил")
             print("Экспортируется только информация о шаблоне")
         
+        # Собираем все связанные объекты
         action_ids = set()
         global_list_ids = set()
         
@@ -229,13 +263,11 @@ class PolicyTemplateManager(BaseManager):
             print(f"Получение связанных действий ({len(action_ids)})...")
             all_actions = self.get_available_actions()
             if all_actions:
-                # Сохраняем полные данные о действиях
                 for action in all_actions:
                     if action.get('id') in action_ids:
                         related_actions.append(action)
                 print(f"Найдено {len(related_actions)} действий")
         
-        # Для глобальных списков
         related_global_lists = []
         if global_list_ids:
             print(f"Получение связанных глобальных списков ({len(global_list_ids)})...")
@@ -255,7 +287,8 @@ class PolicyTemplateManager(BaseManager):
                 print(f"Найдено {len(related_global_lists)} глобальных списков")
         
         export_data = {
-            "template": template_details,
+            "template": template_info,
+            "template_type": template_type,
             "modified_rules": modified_rules_data,
             "related_actions": related_actions,
             "related_global_lists": related_global_lists,
@@ -266,8 +299,6 @@ class PolicyTemplateManager(BaseManager):
                 "base_url": self.api_client.auth_manager.base_url,
                 "export_type": "modified_rules_only",
                 "rules_count": len(modified_rules_data),
-                "user_rules_count": len([r for r in modified_rules_data if r.get('is_user_rule')]),
-                "system_rules_count": len([r for r in modified_rules_data if not r.get('is_user_rule')]),
                 "actions_count": len(related_actions),
                 "global_lists_count": len(related_global_lists)
             }
@@ -275,7 +306,7 @@ class PolicyTemplateManager(BaseManager):
         
         os.makedirs(export_dir, exist_ok=True)
         
-        template_name = template_details.get('name', 'unnamed_template')
+        template_name = template_info.get('name', 'unnamed_template')
         safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in template_name)
         safe_name = safe_name.replace(' ', '_')
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -289,12 +320,6 @@ class PolicyTemplateManager(BaseManager):
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
             print(f"✅ Шаблон успешно экспортирован в файл:")
             print(f"📁 Полный путь: {absolute_filepath}")
-            print(f"📊 Экспортировано:")
-            print(f"  - Всего правил: {len(modified_rules_data)}")
-            print(f"    • Пользовательских: {len([r for r in modified_rules_data if r.get('is_user_rule')])}")
-            print(f"    • Системных с изменениями: {len([r for r in modified_rules_data if not r.get('is_user_rule')])}")
-            print(f"  - Связанных действий: {len(related_actions)}")
-            print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
             return absolute_filepath
         except Exception as e:
             print(f"❌ Ошибка при сохранении шаблона: {e}")
