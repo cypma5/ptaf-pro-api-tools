@@ -142,13 +142,22 @@ class PolicyTemplateManager(BaseManager):
     def _get_user_rules_in_template(self, template_id):
         """Получает пользовательские правила в шаблоне (is_system: false)"""
         print("Получение пользовательских правил в шаблоне...")
-        user_rules = self.get_template_user_rules(template_id)
+        
+        # Используем get_template_rules для получения всех правил
+        all_rules = self.get_template_rules(template_id)
+        
+        if not all_rules:
+            print("Правил не найдено в шаблоне")
+            return []
+        
+        # Фильтруем только пользовательские правила (не системные)
+        user_rules = [rule for rule in all_rules if not rule.get('is_system', True)]
         
         if not user_rules:
             print("Пользовательских правил не найдено")
             return []
         
-        print(f"Найдено {len(user_rules)} пользовательских правил")
+        print(f"Найдено {len(user_rules)} пользовательских правил из {len(all_rules)} всего правил")
         
         full_rules_data = []
         for i, rule in enumerate(user_rules, 1):
@@ -157,16 +166,23 @@ class PolicyTemplateManager(BaseManager):
             
             print(f"  [{i}/{len(user_rules)}] Получение деталей: {rule_name}")
             
-            rule_details = self.get_user_rule_details(template_id, rule_id)
+            # Получаем детали пользовательского правила
+            rule_details = self.get_rule_details(template_id, rule_id)
             if rule_details:
                 # Сохраняем дополнительные метаданные
                 rule_details['is_system'] = False
                 rule_details['original_id'] = rule_id
                 rule_details['original_name'] = rule_name
+                
+                # Получаем настройки агрегации, если есть
+                aggregation_data = self.get_rule_aggregation(template_id, rule_id)
+                if aggregation_data:
+                    rule_details['aggregation'] = aggregation_data
+                    
                 full_rules_data.append(rule_details)
         
         return full_rules_data
-    
+  
     def export_template(self, template_id, export_dir="templates_export", include_user_rules=True):
         """Экспортирует шаблон с разделением на системные и пользовательские правила"""
         print(f"\nЭкспорт шаблона политики ID: {template_id}")
