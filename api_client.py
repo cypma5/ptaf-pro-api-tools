@@ -285,7 +285,7 @@ class APIClient:
         )
     
     def get_user_rules(self, template_id):
-        """Получить пользовательские правила"""
+        """Получить пользовательские правила шаблона"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/with_user_rules/{template_id}/rules",
             operation_name=f"Получение пользовательских правил шаблона {template_id}"
