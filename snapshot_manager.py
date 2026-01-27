@@ -1,4 +1,4 @@
-# snapshot_manager.py (оптимизированный с BaseManager)
+# snapshot_manager.py (обновленный)
 import os
 import json
 from base_manager import BaseManager
@@ -61,9 +61,9 @@ class SnapshotManager(BaseManager):
         roles_manager = RolesManager(self.api_client)
         roles = roles_manager.get_roles()
         
-        # Получаем пользовательские действия
-        from actions_backup_manager import ActionsBackupManager
-        actions_manager = ActionsBackupManager(self.api_client)
+        # Получаем пользовательские действия через ActionsManager
+        from actions_manager import ActionsManager
+        actions_manager = ActionsManager(self.api_client)
         custom_actions = actions_manager.get_custom_actions()
         
         # Сохраняем в файлы
@@ -125,9 +125,9 @@ class SnapshotManager(BaseManager):
                 roles_manager = RolesManager(self.api_client)
                 roles = roles_manager.get_roles()
                 
-                # Получаем пользовательские действия
-                from actions_backup_manager import ActionsBackupManager
-                actions_manager = ActionsBackupManager(self.api_client)
+                # Получаем пользовательские действия через ActionsManager
+                from actions_manager import ActionsManager
+                actions_manager = ActionsManager(self.api_client)
                 custom_actions = actions_manager.get_custom_actions()
                 
                 # Сохраняем в файлы
@@ -456,83 +456,16 @@ class SnapshotManager(BaseManager):
         
         print(f"\nКопирование пользовательских действий из '{source_tenant_name}' в '{target_tenant_name}'")
         
-        # Получаем пользовательские действия из исходного тенанта
-        original_tenant_id = self.api_client.auth_manager.tenant_id
+        # Используем ActionsManager для копирования действий
+        from actions_manager import ActionsManager
+        actions_manager = ActionsManager(self.api_client)
         
-        # Переключаемся на исходный тенант
-        self.api_client.auth_manager.tenant_id = source_tenant_id
-        if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
-            print(f"Не удалось переключиться на исходный тенант {source_tenant_id}")
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            return False
+        # Копируем все действия
+        action_mapping = actions_manager.copy_actions_between_tenants(source_tenant_id, target_tenant_id)
         
-        from actions_backup_manager import ActionsBackupManager
-        actions_manager = ActionsBackupManager(self.api_client)
-        custom_actions = actions_manager.get_custom_actions()
-        if not custom_actions:
-            print("Не найдено пользовательских действий для копирования")
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-            return False
-        
-        print(f"\nНайдено {len(custom_actions)} пользовательских действий:")
-        for i, action in enumerate(custom_actions, 1):
-            print(f"{i}. {action.get('name')} (Тип: {action.get('type_id')})")
-        
-        # Выбор действий для копирования
-        print("\nВыберите действия для копирования:")
-        print("1. Скопировать все пользовательские действия")
-        print("2. Выбрать конкретные действия")
-        print("3. Отмена")
-        
-        choice = input("\nВаш выбор (1-3): ").strip()
-        
-        actions_to_copy = []
-        if choice == '1':
-            actions_to_copy = "all"
-            print("Будут скопированы все пользовательские действия")
-        elif choice == '2':
-            # Выбор конкретных действий
-            action_indices = self._select_multiple_indices(custom_actions, "Выберите номера действий для копирования (через запятую): ")
-            if not action_indices:
-                print("Не выбрано ни одного действия")
-                self.api_client.auth_manager.tenant_id = original_tenant_id
-                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-                return False
-            actions_to_copy = [custom_actions[i].get('name') for i in action_indices]
-            print(f"Выбрано {len(actions_to_copy)} действий для копирования")
-        elif choice == '3':
-            print("Копирование отменено")
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-            return False
+        if action_mapping:
+            print(f"✅ Успешно скопировано {len(action_mapping)} действий")
+            return True
         else:
-            print("Некорректный выбор")
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+            print("❌ Не удалось скопировать действия")
             return False
-        
-        # Подтверждение
-        action_count = len(custom_actions) if actions_to_copy == "all" else len(actions_to_copy)
-        confirm_msg = f"Вы уверены, что хотите скопировать {action_count} действий из '{source_tenant_name}' в '{target_tenant_name}'?"
-        if not self._confirm_action(confirm_msg):
-            print("Копирование отменено")
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-            return False
-        
-        # Выполняем копирование
-        success, success_count, skipped_count, total_actions = actions_manager.copy_custom_actions_to_another_tenant(
-            source_tenant_id, target_tenant_id, actions_to_copy
-        )
-        
-        if success:
-            print(f"\nИтог копирования действий:")
-            print(f"Успешно скопировано: {success_count}")
-            print(f"Пропущено (уже существуют): {skipped_count}")
-            print(f"Ошибок: {total_actions - success_count - skipped_count}")
-            print(f"Всего действий: {total_actions}")
-        else:
-            print("Произошла ошибка при копировании действий")
-        
-        return success_count > 0

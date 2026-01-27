@@ -530,3 +530,135 @@ class ActionsManager(BaseManager):
                     policy_id, action_data['old_action_id'], action_data['new_action_id']
                 )
                 print(f"\nИтог: заменено действий в {total_replaced} из {total_rules} правил")
+
+
+    def get_custom_actions(self):
+        """Получает список пользовательских действий"""
+        response = self.api_client.get_actions()
+        all_actions = self._parse_response_items(response)
+        
+        if all_actions:
+            # Фильтруем только пользовательские действия (is_system = False)
+            custom_actions = [action for action in all_actions if not action.get('is_system', True)]
+            print(f"Успешно получены пользовательские действия: {len(custom_actions)} шт.")
+            return custom_actions
+        return None
+
+    def get_actions_by_name_and_type(self, action_name, action_type_id):
+        """Находит действие по имени и типу"""
+        actions = self.get_available_actions()
+        if not actions:
+            return None
+        
+        for action in actions:
+            if (action.get('name') == action_name and 
+                action.get('type_id') == action_type_id):
+                return action
+        return None
+
+    def find_or_create_action(self, action_data):
+        """Находит существующее действие или создает новое"""
+        action_name = action_data.get('name')
+        action_type_id = action_data.get('type_id')
+        
+        if not action_name or not action_type_id:
+            print(f"❌ Неверные данные действия: имя={action_name}, тип={action_type_id}")
+            return None
+        
+        # Ищем существующее действие
+        existing_action = self.get_actions_by_name_and_type(action_name, action_type_id)
+        if existing_action:
+            print(f"  ✓ Действие '{action_name}' уже существует (ID: {existing_action.get('id')})")
+            return existing_action
+        
+        # Создаем новое действие
+        print(f"  ✗ Действие '{action_name}' не найдено, создаем...")
+        create_data = action_data.copy()
+        
+        # Удаляем системные поля
+        create_data.pop('id', None)
+        create_data.pop('is_system', None)
+        
+        response = self.api_client.create_action(create_data)
+        if response and response.status_code == 201:
+            new_action = response.json()
+            print(f"  ✓ Действие '{action_name}' создано (ID: {new_action.get('id')})")
+            return new_action
+        else:
+            error_msg = response.text if response else "Неизвестная ошибка"
+            print(f"  ✗ Ошибка при создании действия '{action_name}': {error_msg}")
+            return None
+
+    def create_action_mapping(self, source_actions, target_tenant_id=None):
+        """Создает маппинг ID действий между тенантами"""
+        if target_tenant_id and target_tenant_id != self.api_client.auth_manager.tenant_id:
+            original_tenant_id = self.api_client.auth_manager.tenant_id
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на тенант {target_tenant_id}")
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                return {}
+        
+        action_mapping = {}
+        
+        for action in source_actions:
+            original_action_id = action.get('id')
+            action_name = action.get('name')
+            action_type_id = action.get('type_id')
+            
+            # Пропускаем системные действия
+            if action.get('is_system', True):
+                continue
+            
+            # Ищем или создаем действие в целевом тенанте
+            target_action = self.find_or_create_action(action)
+            if target_action:
+                action_mapping[original_action_id] = target_action.get('id')
+        
+        return action_mapping
+
+    def copy_actions_between_tenants(self, source_tenant_id, target_tenant_id, actions_to_copy="all"):
+        """Копирует действия из одного тенанта в другой"""
+        print(f"\nКопирование действий из тенанта {source_tenant_id} в {target_tenant_id}")
+        
+        # Сохраняем текущий тенант
+        original_tenant_id = self.api_client.auth_manager.tenant_id
+        
+        try:
+            # Получаем действия из исходного тенанта
+            self.api_client.auth_manager.tenant_id = source_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на исходный тенант {source_tenant_id}")
+                return {}
+            
+            custom_actions = self.get_custom_actions()
+            if not custom_actions:
+                print("Не найдено пользовательских действий для копирования")
+                return {}
+            
+            # Фильтруем действия по выбранному списку
+            if actions_to_copy != "all":
+                custom_actions = [action for action in custom_actions if action.get('name') in actions_to_copy]
+            
+            if not custom_actions:
+                print("После фильтрации не осталось действий для копирования")
+                return {}
+            
+            print(f"Найдено {len(custom_actions)} действий для копирования")
+            
+            # Создаем маппинг в целевом тенанте
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на целевой тенант {target_tenant_id}")
+                return {}
+            
+            action_mapping = self.create_action_mapping(custom_actions, target_tenant_id)
+            
+            print(f"Создано маппинг для {len(action_mapping)} действий")
+            return action_mapping
+            
+        finally:
+            # Восстанавливаем оригинальный тенант
+            if original_tenant_id:
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)

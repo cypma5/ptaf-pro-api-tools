@@ -1,4 +1,4 @@
-# backup_manager.py (оптимизированный с BaseManager)
+# backup_manager.py (обновленный)
 import os
 import json
 import datetime
@@ -10,11 +10,12 @@ class BackupManager(BaseManager):
         # Инициализируем другие менеджеры
         from backends_manager import BackendsManager
         from roles_manager import RolesManager
-        from actions_backup_manager import ActionsBackupManager
+        # Используем ActionsManager вместо ActionsBackupManager
+        from actions_manager import ActionsManager
         
         self.backends_manager = BackendsManager(api_client)
         self.roles_manager = RolesManager(api_client)
-        self.actions_backup_manager = ActionsBackupManager(api_client)
+        self.actions_manager = ActionsManager(api_client)
 
     def save_snapshot_to_file(self, snapshot, tenant_id, base_dir="snapshot"):
         """Сохраняет конфигурацию в файл"""
@@ -92,8 +93,27 @@ class BackupManager(BaseManager):
 
     def save_custom_actions_to_file(self, actions, tenant_id, base_dir="snapshot"):
         """Сохраняет пользовательские действия в файл"""
-        return self.actions_backup_manager.save_custom_actions_to_file(actions, tenant_id, base_dir)
-
+        # Создаем директорию для тенанта
+        tenant_dir = os.path.join(base_dir, tenant_id)
+        os.makedirs(tenant_dir, exist_ok=True)
+        
+        # Формируем имя файла с датой и временем
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        filename = f"{current_time}-custom_actions.json"
+        filepath = os.path.join(tenant_dir, filename)
+        
+        try:
+            # Очищаем данные действий
+            cleaned_actions = self._clean_actions_data(actions)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(cleaned_actions, f, ensure_ascii=False, indent=2)
+            print(f"Пользовательские действия сохранены в файл: {filepath}")
+            return filepath
+        except Exception as e:
+            print(f"Ошибка при сохранении пользовательских действий: {e}")
+            return None
+    
     def _clean_roles_data(self, roles_data):
         """Очищает данные ролей - удаляет id и is_default"""
         if isinstance(roles_data, dict) and 'items' in roles_data:
@@ -117,6 +137,30 @@ class BackupManager(BaseManager):
             return cleaned_items
         else:
             return roles_data
+    
+    def _clean_actions_data(self, actions_data):
+        """Очищает данные действий - удаляет id и is_system"""
+        if isinstance(actions_data, dict) and 'items' in actions_data:
+            items = actions_data['items']
+            cleaned_items = []
+            for action in items:
+                if not action.get('is_system', True):
+                    cleaned_action = action.copy()
+                    cleaned_action.pop('id', None)
+                    cleaned_action.pop('is_system', None)
+                    cleaned_items.append(cleaned_action)
+            return {'items': cleaned_items}
+        elif isinstance(actions_data, list):
+            cleaned_items = []
+            for action in actions_data:
+                if not action.get('is_system', True):
+                    cleaned_action = action.copy()
+                    cleaned_action.pop('id', None)
+                    cleaned_action.pop('is_system', None)
+                    cleaned_items.append(cleaned_action)
+            return cleaned_items
+        else:
+            return actions_data
 
     def _find_available_snapshots(self, tenant_id):
         """Находит все доступные файлы снапшотов для указанного тенанта"""

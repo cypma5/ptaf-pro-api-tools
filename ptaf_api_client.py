@@ -1,4 +1,3 @@
-# ptaf_api_client.py (полностью обновленный)
 import os
 import json
 import argparse
@@ -17,7 +16,6 @@ from snapshot_manager import SnapshotManager
 from roles_manager import RolesManager
 from backends_manager import BackendsManager
 from backup_manager import BackupManager
-from actions_backup_manager import ActionsBackupManager
 from global_lists_manager import GlobalListsManager
 
 class PTAFClient:
@@ -36,11 +34,7 @@ class PTAFClient:
         )
         
         self.base_client = BaseAPIClient(self.auth_manager, debug)
-        
-        # Создаем централизованный API клиент
         self.api_client = APIClient(self.auth_manager, self.base_client.make_request)
-        
-        # ВСЕ менеджеры теперь используют APIClient и BaseManager
         self.traffic_settings_manager = TrafficSettingsManager(self.api_client)
         self.rules_manager = RulesManager(self.api_client)
         self.policy_template_manager = PolicyTemplateManager(self.api_client)
@@ -51,10 +45,6 @@ class PTAFClient:
         self.roles_manager = RolesManager(self.api_client)
         self.backends_manager = BackendsManager(self.api_client)
         self.backup_manager = BackupManager(self.api_client)
-        self.actions_backup_manager = ActionsBackupManager(self.api_client)
-        
-        # TenantManager и TenantExtendedManager остаются со старым интерфейсом,
-        # так как они работают непосредственно с AuthManager
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
         self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
 
@@ -75,13 +65,17 @@ class PTAFClient:
         """Управление настройками traffic_settings"""
         return self.traffic_settings_manager.manage_traffic_settings()
 
-    def export_rules(self, export_dir="exported_rules"):
+    def export_rules(self, export_dir="exported_rules", preserve_state=False):
         """Экспортирует правила"""
-        return self.rules_manager.export_rules(export_dir)
+        return self.rules_manager.export_rules(export_dir, preserve_state)
 
-    def import_rules(self, directory_path):
+    def export_rules_with_actions(self, export_dir="exported_rules_with_actions", preserve_state=False):
+        """Экспортирует правила с сохранением связей с действиями"""
+        return self.rules_manager.export_rules_with_actions(export_dir, preserve_state)
+
+    def import_rules(self, directory_path, include_actions=False, preserve_state=False):
         """Импортирует правила из директории"""
-        return self.rules_manager.import_rules(directory_path)
+        return self.rules_manager.import_rules(directory_path, include_actions, preserve_state)
 
     def delete_all_user_rules(self):
         """Удаляет все пользовательские правила"""
@@ -124,8 +118,12 @@ class PTAFClient:
         return self.tenant_extended_manager.manage_tenants_extended()
 
     def manage_global_lists(self):
-        """Управление глобальными списками"""
+        """Управление глобальных списков"""
         return self.global_lists_manager.manage_global_lists()
+
+    def manage_rules(self):
+        """Управление правилами"""
+        return self.rules_manager.manage_rules()
 
 def main():
     parser = argparse.ArgumentParser(description="PTAF PRO API Client")
@@ -189,6 +187,11 @@ def main():
         help="Управление глобальных списков"
     )
     parser.add_argument(
+        "--rules",
+        action="store_true",
+        help="Работа с правилами"
+    )
+    parser.add_argument(
         "--config",
         default="ptaf_api_client_config.json",
         help="Путь к конфигурационному файлу"
@@ -211,80 +214,59 @@ def main():
         # Если нет аргументов - запускаем интерактивный режим
         if not any([args.source, args.export, args.delete_all, args.policy_template,
                     args.traffic_settings, args.actions, args.snapshot, args.restore, 
-                    args.transfer, args.dangerous, args.tenants, args.global_lists]):
+                    args.transfer, args.dangerous, args.tenants, args.global_lists, args.rules]):
             while True:
                 print("\nГлавное меню:")
-                print("1. Импорт правил")
-                print("2. Экспорт правил")
-                print("3. Управление шаблонами и политиками безопасности")
-                print("4. Управление настройками traffic_settings")
-                print("5. Управление действиями в правилах")
-                print("6. Получение конфигураций тенантов")
-                print("7. Восстановление конфигураций тенантов")
-                print("8. Перенос объектов между тенантами")
-                print("9. Опасные действия")
-                print("10. Работа с тенантами")
-                print("11. Управление глобальными списками")
-                print("12. Выход")
+                print("1. Работа с правилами")
+                print("2. Управление шаблонами и политиками безопасности")
+                print("3. Управление настройками traffic_settings")
+                print("4. Управление действиями в правилах")
+                print("5. Получение конфигураций тенантов")
+                print("6. Восстановление конфигураций тенантов")
+                print("7. Перенос объектов между тенантами")
+                print("8. Работа с тенантами")
+                print("9. Управление глобальных списков")
+                print("10. Выход")
                 
-                choice = input("\nВыберите действие (1-12): ")
+                choice = input("\nВыберите действие (1-10): ")
                 
                 if choice == '1':
-                    source_dir = input("Введите путь к директории с JSON файлами: ").strip()
-                    if source_dir and os.path.isdir(source_dir):
-                        if not client.select_tenant():
-                            print("Не удалось выбрать тенант")
-                            continue
-                        client.import_rules(directory_path=source_dir)
-                    else:
-                        print("Указанная директория не существует")
+                    client.manage_rules()
                 
                 elif choice == '2':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    export_dir = input("Введите путь для экспорта [exported_rules]: ").strip()
-                    if not export_dir:
-                        export_dir = "exported_rules"
-                    client.export_rules(export_dir)
-                
-                elif choice == '3':
                     client.manage_policy_templates_extended()
                 
-                elif choice == '4':
+                elif choice == '3':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_traffic_settings()
                 
-                elif choice == '5':
+                elif choice == '4':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_actions_operations()
                 
-                elif choice == '6':
+                elif choice == '5':
                     client.manage_snapshots()
                 
-                elif choice == '7':
+                elif choice == '6':
                     if not client.select_tenant():
                         print("Не удалось выбрать тенант")
                         continue
                     client.manage_restore()
                 
-                elif choice == '8':
+                elif choice == '7':
                     client.manage_tenant_transfer()
                 
-                elif choice == '9':
-                    client.manage_dangerous_actions()
-                
-                elif choice == '10':
+                elif choice == '8':
                     client.manage_tenants()
                 
-                elif choice == '11':
+                elif choice == '9':
                     client.manage_global_lists()
                 
-                elif choice == '12':
+                elif choice == '10':
                     return
                 
                 else:
@@ -292,7 +274,10 @@ def main():
         
         # Обработка аргументов командной строки
         else:
-            if args.global_lists:
+            if args.rules:
+                client.manage_rules()
+            
+            elif args.global_lists:
                 client.manage_global_lists()
             
             elif args.policy_template:
@@ -302,13 +287,49 @@ def main():
                 if not client.select_tenant():
                     print("Не удалось выбрать тенант")
                     return
-                client.export_rules()
+                
+                # Спрашиваем, нужно ли сохранить связи с действиями
+                include_actions = False
+                choice = input("\nСохранить связи с действиями при экспорте? (y/n): ").lower()
+                if choice == 'y':
+                    include_actions = True
+                    
+                    # Спрашиваем, нужно ли сохранить состояние
+                    preserve_state = False
+                    choice = input("\nСохранить исходное состояние правил (включено/выключено)? (y/n): ").lower()
+                    if choice == 'y':
+                        preserve_state = True
+                        client.export_rules_with_actions(preserve_state=preserve_state)
+                    else:
+                        client.export_rules_with_actions(preserve_state=False)
+                else:
+                    # Для экспорта без действий не спрашиваем о состоянии
+                    export_dir = input("Введите путь для экспорта [exported_rules]: ").strip()
+                    if not export_dir:
+                        export_dir = "exported_rules"
+                    client.export_rules(export_dir=export_dir, preserve_state=False)
             
             elif args.source:
                 if not client.select_tenant():
                     print("Не удалось выбрать тенант")
                     return
-                client.import_rules(directory_path=args.source)
+                
+                # Спрашиваем, нужно ли сохранить связи с действиями
+                include_actions = False
+                choice = input("\nСохранить связи с действиями при импорте? (y/n): ").lower()
+                if choice == 'y':
+                    include_actions = True
+                    
+                    # Спрашиваем, нужно ли сохранить состояние
+                    preserve_state = False
+                    choice = input("\nПеренести правила в исходном состоянии (включено/выключено)? (y/n): ").lower()
+                    if choice == 'y':
+                        preserve_state = True
+                        client.import_rules(directory_path=args.source, include_actions=True, preserve_state=True)
+                    else:
+                        client.import_rules(directory_path=args.source, include_actions=True, preserve_state=False)
+                else:
+                    client.import_rules(directory_path=args.source, include_actions=False, preserve_state=False)
             
             elif args.delete_all:
                 if not client.select_tenant():
@@ -345,6 +366,9 @@ def main():
             
             elif args.tenants:
                 client.manage_tenants()
+            
+            elif args.global_lists:
+                client.manage_global_lists()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")
