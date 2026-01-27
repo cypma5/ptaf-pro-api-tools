@@ -3,7 +3,6 @@ import json
 import argparse
 from auth import AuthManager
 from tenants import TenantManager
-from tenants_extended import TenantExtendedManager
 from base_client import BaseAPIClient
 from api_client import APIClient
 from base_manager import BaseManager
@@ -46,7 +45,6 @@ class PTAFClient:
         self.backends_manager = BackendsManager(self.api_client)
         self.backup_manager = BackupManager(self.api_client)
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
-        self.tenant_extended_manager = TenantExtendedManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
         try:
@@ -115,7 +113,7 @@ class PTAFClient:
 
     def manage_tenants(self):
         """Расширенное управление тенантами"""
-        return self.tenant_extended_manager.manage_tenants_extended()
+        return self.tenant_manager.manage_tenants_extended()
 
     def manage_global_lists(self):
         """Управление глобальных списков"""
