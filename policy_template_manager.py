@@ -1,4 +1,4 @@
-# policy_template_manager.py (исправленный с раздельной обработкой)
+# policy_template_manager.py (очищенная версия)
 import os
 import json
 import datetime
@@ -69,6 +69,18 @@ class PolicyTemplateManager(BaseManager):
         """Получает список доступных действий"""
         response = self.api_client.get_actions()
         return self._parse_response_items(response)
+    
+    def get_policy_user_rules_in_template(self, template_id):
+        """Получает пользовательские правила внутри обычного шаблона"""
+        response = self.api_client.get_policy_user_rules_in_template(template_id)
+        return self._parse_response_items(response)
+    
+    def get_policy_user_rule_details_in_template(self, template_id, rule_id):
+        """Получает детали пользовательского правила внутри обычного шаблона"""
+        response = self.api_client.get_policy_user_rule_details_in_template(template_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
     
     # ==================== СОЗДАНИЕ И ОБНОВЛЕНИЕ ====================
     
@@ -143,15 +155,29 @@ class PolicyTemplateManager(BaseManager):
         """Получает пользовательские правила в шаблоне (is_system: false)"""
         print("Получение пользовательских правил в шаблоне...")
         
-        # Получаем детали шаблона
+        # Получаем детали шаблона для определения типа
         template_details = self.get_template_details(template_id)
         if not template_details:
             print("Не удалось получить детали шаблона")
             return []
         
-        # Это обычный шаблон с пользовательскими правилами
-        print("Обычный шаблон с пользовательскими правилами - получение правил...")
-        user_rules = self.get_policy_user_rules_in_template(template_id)
+        template_type = template_details.get('type', 'user')
+        has_user_rules = template_details.get('has_user_rules', False)
+        
+        if not has_user_rules:
+            print("Шаблон не поддерживает пользовательские правила")
+            return []
+        
+        user_rules = []
+        
+        if template_type == 'with_user_rules':
+            # Это отдельный набор пользовательских правил
+            print("Шаблон типа 'with_user_rules' - получение правил из набора...")
+            user_rules = self.get_user_rules(template_id)
+        else:
+            # Это обычный шаблон с пользовательскими правилами
+            print("Обычный шаблон с пользовательскими правилами - получение правил...")
+            user_rules = self.get_policy_user_rules_in_template(template_id)
         
         if not user_rules:
             print("Пользовательских правил не найдено")
@@ -166,31 +192,21 @@ class PolicyTemplateManager(BaseManager):
             
             print(f"  [{i}/{len(user_rules)}] Получение деталей: {rule_name}")
             
-            # Получаем детали правила из обычного шаблона
-            rule_details = self.get_policy_user_rule_details_in_template(template_id, rule_id)
+            if template_type == 'with_user_rules':
+                rule_details = self.get_user_rule_details(template_id, rule_id)
+            else:
+                rule_details = self.get_policy_user_rule_details_in_template(template_id, rule_id)
             
             if rule_details:
-                # Сохраняем тип для импорта
-                rule_details['template_type'] = 'user_policy'  # Новый тип для обычных шаблонов
+                # Сохраняем тип шаблона для правильной обработки при импорте
+                rule_details['template_type'] = template_type
                 rule_details['is_system'] = False
                 rule_details['original_id'] = rule_id
                 rule_details['original_name'] = rule_name
-                rule_details['source_template_id'] = template_id
+                rule_details['has_user_rules'] = has_user_rules
                 full_rules_data.append(rule_details)
         
         return full_rules_data
-
-    def get_policy_user_rules_in_template(self, template_id):
-        """Получает пользовательские правила внутри обычного шаблона"""
-        response = self.api_client.get_policy_user_rules_in_template(template_id)
-        return self._parse_response_items(response)
-    
-    def get_policy_user_rule_details_in_template(self, template_id, rule_id):
-        """Получает детали пользовательского правила внутри обычного шаблона"""
-        response = self.api_client.get_policy_user_rule_details_in_template(template_id, rule_id)
-        if response and response.status_code == 200:
-            return response.json()
-        return None
     
     def export_template(self, template_id, export_dir="templates_export", include_user_rules=True):
         """Экспортирует шаблон с разделением на системные и пользовательские правила"""
@@ -464,9 +480,9 @@ class PolicyTemplateManager(BaseManager):
                 failed_count += 1
         
         return imported_count, failed_count
-
+    
     def _import_user_rules_to_template(self, template_id, user_rules_data, action_mapping, preserve_state=True,
-                                    source_tenant_id=None, target_tenant_id=None):
+                                      source_tenant_id=None, target_tenant_id=None):
         """Импортирует пользовательские правила в шаблон, используя логику 'Копирование правил'"""
         if not user_rules_data:
             return 0, 0
@@ -569,624 +585,8 @@ class PolicyTemplateManager(BaseManager):
             if original_tenant_id:
                 self.api_client.auth_manager.tenant_id = original_tenant_id
                 self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-
-    def _find_source_user_rules_set(self, source_tenant_id):
-        """Находит набор пользовательских правил в исходном тенанте"""
-        # Сохраняем текущий тенант
-        original_tenant_id = self.api_client.auth_manager.tenant_id
-        
-        try:
-            # Переключаемся на исходный тенант
-            if source_tenant_id and source_tenant_id != original_tenant_id:
-                print(f"    🔀 Переключаемся на исходный тенант для поиска набора правил: {source_tenant_id}")
-                self.api_client.auth_manager.tenant_id = source_tenant_id
-                if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
-                    print("    ✗ Не удалось переключиться на исходный тенант")
-                    return None
-            
-            # Получаем все наборы пользовательских правил в исходном тенанте
-            user_rules_sets = self.get_templates_with_user_rules()
-            if not user_rules_sets:
-                return None
-            
-            # Возвращаем первый найденный набор (можно улучшить логику выбора)
-            return user_rules_sets[0].get('id')
-            
-        except Exception as e:
-            print(f"    ✗ Ошибка при поиске набора правил: {e}")
-            return None
-        finally:
-            # Восстанавливаем оригинальный тенант
-            if original_tenant_id:
-                self.api_client.auth_manager.tenant_id = original_tenant_id
-                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-
-    def _copy_entire_user_rules_set(self, source_set_id, target_template_id, action_mapping, preserve_state=True, 
-                                    source_tenant_id=None, target_tenant_id=None):
-        """Копирует весь набор пользовательских правил из исходного в целевой тенант"""
-        imported_count = 0
-        failed_count = 0
-        
-        print(f"    Копирование набора правил {source_set_id}...")
-        
-        # Сохраняем текущий тенант
-        original_tenant_id = self.api_client.auth_manager.tenant_id
-        
-        try:
-            # ШАГ 1: Переключаемся на ИСХОДНЫЙ тенант для получения правил
-            if source_tenant_id and source_tenant_id != original_tenant_id:
-                print(f"    🔀 Переключаемся на исходный тенант: {source_tenant_id}")
-                self.api_client.auth_manager.tenant_id = source_tenant_id
-                if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
-                    print("    ✗ Не удалось переключиться на исходный тенант")
-                    return 0, 0
-            
-            # Получаем все правила из исходного набора
-            source_rules = self.get_user_rules(source_set_id)
-            if not source_rules:
-                print("    ✗ Исходный набор правил пуст")
-                return 0, 0
-            
-            print(f"    Найдено {len(source_rules)} правил в исходном наборе")
-            
-            # Создаем временную директорию для экспорта правил
-            temp_dir = tempfile.mkdtemp()
-            
-            try:
-                # Сохраняем все правила из набора в файлы
-                rule_files = []
-                for i, rule in enumerate(source_rules, 1):
-                    rule_id = rule.get('id')
-                    rule_name = rule.get('name', f'Правило {i}')
-                    
-                    print(f"    [{i}/{len(source_rules)}] Получение деталей правила: {rule_name}")
-                    
-                    # Получаем детали правила
-                    rule_details = self.get_user_rule_details(source_set_id, rule_id)
-                    if not rule_details:
-                        print(f"    ✗ Не удалось получить детали правила '{rule_name}'")
-                        failed_count += 1
-                        continue
-                    
-                    # ОЧИЩАЕМ данные правила от системных полей
-                    cleaned_rule_data = self._clean_rule_data_for_export(rule_details)
-                    
-                    # Получаем связанные действия
-                    related_actions = []
-                    original_actions = cleaned_rule_data.get('actions', [])
-                    if original_actions:
-                        all_actions = self.get_available_actions()
-                        if all_actions:
-                            actions_info = {}
-                            for action in all_actions:
-                                action_id = action.get('id')
-                                if action_id in original_actions:
-                                    actions_info[str(action_id)] = {
-                                        'name': action.get('name'),
-                                        'type_id': action.get('type_id'),
-                                        'type_name': action.get('type_name', ''),
-                                        'configuration': action.get('configuration', {}),
-                                        'is_system': action.get('is_system', True)
-                                    }
-                            export_rule_data['actions_info'] = actions_info
-                            print(f"    Добавлена информация о {len(actions_info)} действиях")
-                    
-                    # Подготавливаем данные для экспорта
-                    export_rule_data = {
-                        'rule_data': cleaned_rule_data,
-                        'actions_info': {},
-                        'export_metadata': {
-                            'export_time': datetime.datetime.now().isoformat(),
-                            'rule_name': rule_name,
-                            'preserve_state': preserve_state,
-                            'rule_enabled': cleaned_rule_data.get('enabled', True),
-                            'source_set_id': source_set_id,
-                            'source_tenant_id': source_tenant_id,
-                            'actions_count': len(original_actions)
-                        }
-                    }
-                    
-                    # Добавляем информацию о действиях
-                    if original_actions:
-                        all_actions = self.get_available_actions()
-                        if all_actions:
-                            actions_info = {}
-                            for action in all_actions:
-                                if action.get('id') in original_actions:
-                                    actions_info[str(action.get('id'))] = {
-                                        'name': action.get('name'),
-                                        'type_id': action.get('type_id'),
-                                        'configuration': action.get('configuration')
-                                    }
-                            export_rule_data['actions_info'] = actions_info
-                    
-                    # Сохраняем в файл
-                    safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in rule_name)
-                    safe_name = safe_name.replace(' ', '_')
-                    filename = f"{safe_name}_from_set.ptafpro"
-                    filepath = os.path.join(temp_dir, filename)
-                    
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(export_rule_data, f, ensure_ascii=False, indent=2)
-                    
-                    rule_files.append(filepath)
-                    print(f"    [{i}/{len(source_rules)}] Правило '{rule_name}' подготовлено для копирования")
-                
-                # ШАГ 2: Переключаемся на ЦЕЛЕВОЙ тенант для импорта
-                if target_tenant_id and target_tenant_id != self.api_client.auth_manager.tenant_id:
-                    print(f"    🔀 Переключаемся на целевой тенант: {target_tenant_id}")
-                    self.api_client.auth_manager.tenant_id = target_tenant_id
-                    if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
-                        print("    ✗ Не удалось переключиться на целевой тенант")
-                        return 0, 0
-                
-                # Используем RulesManager для копирования правил
-                from rules_manager import RulesManager
-                rules_manager = RulesManager(self.api_client)
-                
-                # Копируем все правила через RulesManager
-                print(f"\n    Копирование всех правил через RulesManager...")
-                
-                for file_path in rule_files:
-                    filename = os.path.basename(file_path)
-                    print(f"      Копирование файла: {filename}")
-                    
-                    # Используем import_single_rule_with_actions из RulesManager
-                    success = rules_manager.import_single_rule_with_actions(
-                        file_path, action_mapping, False, preserve_state, None
-                    )
-                    
-                    if success:
-                        imported_count += 1
-                        print(f"      ✅ Правило успешно скопировано")
-                    else:
-                        failed_count += 1
-                        print(f"      ✗ Ошибка при копировании правила")
-            
-            except Exception as e:
-                print(f"      ✗ Ошибка при копировании набора правил: {e}")
-                failed_count = len(source_rules)
-            finally:
-                # Очищаем временные файлы
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception as e:
-                    print(f"      ⚠️ Не удалось удалить временную директорию: {e}")
-                    pass
-            
-            return imported_count, failed_count
-            
-        finally:
-            # Восстанавливаем оригинальный тенант
-            if original_tenant_id:
-                self.api_client.auth_manager.tenant_id = original_tenant_id
-                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-
-    def _clean_rule_data_for_export(self, rule_data):
-        """Очищает данные правила от системных полей перед экспортом"""
-        cleaned_data = rule_data.copy()
-        
-        # Удаляем системные поля
-        fields_to_remove = [
-            'id', 'created', 'updated', 'created_by', 'updated_by',
-            'rule_id', 'is_system', 'has_overrides', 'template_id'
-        ]
-        
-        for field in fields_to_remove:
-            if field in cleaned_data:
-                del cleaned_data[field]
-        
-        # Также удаляем из конфигурации, если есть
-        if 'configuration' in cleaned_data:
-            if 'id' in cleaned_data['configuration']:
-                del cleaned_data['configuration']['id']
-        
-        return cleaned_data
-
-    def _import_rules_to_user_rules_set(self, template_id, user_rules_data, action_mapping, preserve_state=True):
-        """Импортирует правила в набор пользовательских правил"""
-        imported_count = 0
-        failed_count = 0
-        
-        # Используем RulesManager для копирования пользовательских правил
-        from rules_manager import RulesManager
-        rules_manager = RulesManager(self.api_client)
-        
-        # Создаем временную директорию для экспорта пользовательских правил
-        temp_dir = tempfile.mkdtemp()
-        
-        try:
-            # Сохраняем пользовательские правила в файлы
-            user_rules_files = []
-            for i, rule_data in enumerate(user_rules_data, 1):
-                rule_name = rule_data.get('name', f'Пользовательское правило {i}')
-                
-                # Подготавливаем данные для экспорта
-                export_rule_data = {
-                    'rule_data': rule_data,
-                    'actions_info': {},
-                    'export_metadata': {
-                        'export_time': datetime.datetime.now().isoformat(),
-                        'rule_name': rule_name,
-                        'preserve_state': preserve_state,
-                        'rule_enabled': rule_data.get('enabled', True)
-                    }
-                }
-                
-                # Добавляем информацию о действиях
-                original_actions = rule_data.get('actions', [])
-                if original_actions:
-                    all_actions = self.get_available_actions()
-                    if all_actions:
-                        actions_info = {}
-                        for action in all_actions:
-                            if action.get('id') in original_actions:
-                                actions_info[str(action.get('id'))] = {
-                                    'name': action.get('name'),
-                                    'type_id': action.get('type_id'),
-                                    'configuration': action.get('configuration')
-                                }
-                        export_rule_data['actions_info'] = actions_info
-                
-                # Сохраняем в файл
-                safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in rule_name)
-                safe_name = safe_name.replace(' ', '_')
-                filename = f"{safe_name}_with_actions.ptafpro"
-                filepath = os.path.join(temp_dir, filename)
-                
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(export_rule_data, f, ensure_ascii=False, indent=2)
-                
-                user_rules_files.append(filepath)
-                print(f"    [{i}/{len(user_rules_data)}] Правило '{rule_name}' подготовлено для импорта")
-            
-            # Импортируем пользовательские правила с использованием action_mapping
-            print(f"\n    Импорт пользовательских правил через RulesManager...")
-            
-            for file_path in user_rules_files:
-                filename = os.path.basename(file_path)
-                print(f"      Импорт файла: {filename}")
-                
-                # Используем import_single_rule_with_actions из RulesManager
-                success = rules_manager.import_single_rule_with_actions(
-                    file_path, action_mapping, False, preserve_state, None
-                )
-                
-                if success:
-                    imported_count += 1
-                    print(f"      ✅ Правило успешно импортировано")
-                else:
-                    failed_count += 1
-                    print(f"      ✗ Ошибка при импорте правила")
-            
-        except Exception as e:
-            print(f"      ✗ Ошибка при импорте пользовательских правил: {e}")
-            failed_count = len(user_rules_data)
-        finally:
-            # Очищаем временные файлы
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception as e:
-                print(f"      ⚠️ Не удалось удалить временную директорию: {e}")
-                # Игнорируем ошибку удаления
-                pass
-        
-        return imported_count, failed_count
-
-    def _import_matching_rules_from_sets(self, template_id, user_rules_data, action_mapping, preserve_state=True):
-        """Ищет и импортирует правила с такими же именами из наборов пользовательских правил"""
-        if not user_rules_data:
-            return 0, 0
-        
-        imported_count = 0
-        failed_count = 0
-        
-        print(f"    Поиск {len(user_rules_data)} правил в наборах пользовательских правил...")
-        
-        # Получаем все наборы пользовательских правил
-        all_user_rules_sets = self.get_templates_with_user_rules()
-        if not all_user_rules_sets:
-            print("    ✗ Не найдено наборов пользовательских правил")
-            return 0, len(user_rules_data)
-        
-        print(f"    Найдено {len(all_user_rules_sets)} наборов пользовательских правил")
-        
-        # Собираем все правила из всех наборов
-        all_rules_from_sets = []
-        rule_name_to_set_map = {}  # Словарь: имя правила -> (набор_id, правило_id)
-        
-        for rules_set in all_user_rules_sets:
-            set_id = rules_set.get('id')
-            set_name = rules_set.get('name', 'Без названия')
-            
-            print(f"    Проверка набора '{set_name}'...")
-            
-            rules_in_set = self.get_user_rules(set_id)
-            if rules_in_set:
-                for rule in rules_in_set:
-                    rule_id = rule.get('id')
-                    rule_name = rule.get('name')
-                    if rule_name:
-                        all_rules_from_sets.append(rule)
-                        rule_name_to_set_map[rule_name] = (set_id, rule_id)
-        
-        print(f"    Всего найдено {len(all_rules_from_sets)} правил во всех наборах")
-        
-        # Находим совпадения по именам
-        matching_rules = []
-        for rule_data in user_rules_data:
-            rule_name = rule_data.get('name')
-            if rule_name and rule_name in rule_name_to_set_map:
-                set_id, rule_id = rule_name_to_set_map[rule_name]
-                print(f"    ✓ Найдено совпадение: '{rule_name}' в наборе {set_id}")
-                
-                # Получаем детали правила из набора
-                rule_details = self.get_user_rule_details(set_id, rule_id)
-                if rule_details:
-                    rule_details['source_set_id'] = set_id
-                    rule_details['source_rule_id'] = rule_id
-                    rule_details['template_type'] = 'with_user_rules'
-                    rule_details['is_system'] = False
-                    rule_details['original_name'] = rule_name
-                    matching_rules.append(rule_details)
-            else:
-                print(f"    ✗ Правило '{rule_name}' не найдено в наборах")
-                failed_count += 1
-        
-        if not matching_rules:
-            print("    ✗ Не найдено совпадений по именам правил")
-            return 0, len(user_rules_data)
-        
-        print(f"    Найдено {len(matching_rules)} совпадений из {len(user_rules_data)} правил")
-        
-        # Импортируем найденные правила через RulesManager (как в "Копирование правил в другой тенант")
-        from rules_manager import RulesManager
-        rules_manager = RulesManager(self.api_client)
-        
-        # Создаем временную директорию для экспорта найденных правил
-        temp_dir = tempfile.mkdtemp()
-        
-        try:
-            # Сохраняем найденные правила в файлы
-            rule_files = []
-            for i, rule_details in enumerate(matching_rules, 1):
-                rule_name = rule_details.get('name', f'Правило {i}')
-                
-                # Подготавливаем данные для экспорта
-                export_rule_data = {
-                    'rule_data': rule_details,
-                    'actions_info': {},
-                    'export_metadata': {
-                        'export_time': datetime.datetime.now().isoformat(),
-                        'rule_name': rule_name,
-                        'preserve_state': preserve_state,
-                        'rule_enabled': rule_details.get('enabled', True),
-                        'source_type': 'user_rules_set'
-                    }
-                }
-                
-                # Добавляем информацию о действиях
-                original_actions = rule_details.get('actions', [])
-                if original_actions:
-                    all_actions = self.get_available_actions()
-                    if all_actions:
-                        actions_info = {}
-                        for action in all_actions:
-                            if action.get('id') in original_actions:
-                                actions_info[str(action.get('id'))] = {
-                                    'name': action.get('name'),
-                                    'type_id': action.get('type_id'),
-                                    'configuration': action.get('configuration')
-                                }
-                        export_rule_data['actions_info'] = actions_info
-                
-                # Сохраняем в файл
-                safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in rule_name)
-                safe_name = safe_name.replace(' ', '_')
-                filename = f"{safe_name}_from_set.ptafpro"
-                filepath = os.path.join(temp_dir, filename)
-                
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(export_rule_data, f, ensure_ascii=False, indent=2)
-                
-                rule_files.append(filepath)
-                print(f"    [{i}/{len(matching_rules)}] Правило '{rule_name}' подготовлено для импорта")
-            
-            # Импортируем правила с использованием action_mapping
-            print(f"\n    Импорт правил через RulesManager (как в 'Копирование правил')...")
-            
-            for file_path in rule_files:
-                filename = os.path.basename(file_path)
-                print(f"      Импорт файла: {filename}")
-                
-                # Используем import_single_rule_with_actions из RulesManager
-                success = rules_manager.import_single_rule_with_actions(
-                    file_path, action_mapping, False, preserve_state, None
-                )
-                
-                if success:
-                    imported_count += 1
-                    print(f"      ✅ Правило успешно импортировано")
-                else:
-                    failed_count += 1
-                    print(f"      ✗ Ошибка при импорте правила")
-            
-        except Exception as e:
-            print(f"      ✗ Ошибка при импорте правил: {e}")
-            failed_count = len(matching_rules)
-        finally:
-            # Очищаем временные файлы
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-        
-        return imported_count, failed_count
-
-    def _import_rules_from_user_rules_set(self, template_id, rules_data, action_mapping, preserve_state=True):
-        """Импортирует правила из наборов пользовательских правил через RulesManager"""
-        imported_count = 0
-        failed_count = 0
-        
-        # Используем RulesManager для копирования пользовательских правил
-        from rules_manager import RulesManager
-        rules_manager = RulesManager(self.api_client)
-        
-        # Создаем временную директорию для экспорта пользовательских правил
-        temp_dir = tempfile.mkdtemp()
-        
-        try:
-            # Сохраняем пользовательские правила в файлы
-            user_rules_files = []
-            for i, rule_data in enumerate(rules_data, 1):
-                rule_name = rule_data.get('name', f'Пользовательское правило {i}')
-                
-                # Подготавливаем данные для экспорта
-                export_rule_data = {
-                    'rule_data': rule_data,
-                    'actions_info': {},
-                    'export_metadata': {
-                        'export_time': datetime.datetime.now().isoformat(),
-                        'rule_name': rule_name,
-                        'preserve_state': preserve_state,
-                        'rule_enabled': rule_data.get('enabled', True)
-                    }
-                }
-                
-                # Добавляем информацию о действиях
-                original_actions = rule_data.get('actions', [])
-                if original_actions:
-                    all_actions = self.get_available_actions()
-                    if all_actions:
-                        actions_info = {}
-                        for action in all_actions:
-                            if action.get('id') in original_actions:
-                                actions_info[str(action.get('id'))] = {
-                                    'name': action.get('name'),
-                                    'type_id': action.get('type_id'),
-                                    'configuration': action.get('configuration')
-                                }
-                        export_rule_data['actions_info'] = actions_info
-                
-                # Сохраняем в файл
-                safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in rule_name)
-                safe_name = safe_name.replace(' ', '_')
-                filename = f"{safe_name}_with_actions.ptafpro"
-                filepath = os.path.join(temp_dir, filename)
-                
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(export_rule_data, f, ensure_ascii=False, indent=2)
-                
-                user_rules_files.append(filepath)
-                print(f"    [{i}/{len(rules_data)}] Правило '{rule_name}' подготовлено для импорта")
-            
-            # Импортируем пользовательские правила с использованием action_mapping
-            print(f"\n    Импорт пользовательских правил через RulesManager...")
-            
-            for file_path in user_rules_files:
-                filename = os.path.basename(file_path)
-                print(f"      Импорт файла: {filename}")
-                
-                # Используем import_single_rule_with_actions из RulesManager
-                success = rules_manager.import_single_rule_with_actions(
-                    file_path, action_mapping, False, preserve_state, None
-                )
-                
-                if success:
-                    imported_count += 1
-                    print(f"      ✅ Правило успешно импортировано")
-                else:
-                    failed_count += 1
-                    print(f"      ✗ Ошибка при импорте правила")
-            
-        except Exception as e:
-            print(f"      ✗ Ошибка при импорте пользовательских правил: {e}")
-            failed_count = len(rules_data)
-        finally:
-            # Очищаем временные файлы
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-        
-        return imported_count, failed_count
     
-    def _update_user_rules_in_policy_template(self, template_id, rules_data, action_mapping, preserve_state=True):
-        """Обновляет пользовательские правила в обычном шаблоне через PATCH"""
-        imported_count = 0
-        failed_count = 0
-        
-        # Получаем текущие правила в шаблоне
-        existing_rules = self.get_policy_user_rules_in_template(template_id)
-        if not existing_rules:
-            print(f"    ✗ Не найдено правил в шаблоне")
-            return 0, len(rules_data)
-        
-        # Создаем словарь для быстрого поиска правил по имени
-        existing_rules_dict = {rule.get('name'): rule for rule in existing_rules}
-        
-        for i, rule_data in enumerate(rules_data, 1):
-            rule_name = rule_data.get('name', f'Пользовательское правило {i}')
-            
-            print(f"    [{i}/{len(rules_data)}] Обновление правила: {rule_name}")
-            
-            # Ищем правило в целевом шаблоне по имени
-            if rule_name not in existing_rules_dict:
-                print(f"      ✗ Правило '{rule_name}' не найдено в целевом шаблоне")
-                failed_count += 1
-                continue
-            
-            target_rule = existing_rules_dict[rule_name]
-            target_rule_id = target_rule.get('id')
-            
-            if not target_rule_id:
-                print(f"      ✗ У правила '{rule_name}' нет ID")
-                failed_count += 1
-                continue
-            
-            # Подготавливаем данные для PATCH запроса
-            update_data = {}
-            
-            # Обновляем действия с использованием маппинга
-            original_actions = rule_data.get('actions', [])
-            if original_actions:
-                mapped_actions = []
-                for action_id in original_actions:
-                    if str(action_id) in action_mapping:
-                        mapped_actions.append(action_mapping[str(action_id)])
-                    else:
-                        mapped_actions.append(action_id)  # Оставляем как есть для системных действий
-                
-                if 'configuration' not in update_data:
-                    update_data['configuration'] = {}
-                update_data['configuration']['actions'] = mapped_actions
-            
-            # Сохраняем состояние, если нужно
-            if 'enabled' in rule_data and preserve_state:
-                update_data['enabled'] = rule_data['enabled']
-                print(f"      Состояние: {'включено' if rule_data['enabled'] else 'выключено'} (сохранено)")
-            
-            if not update_data:
-                print(f"      ⚠️ Нет данных для обновления, пропускаем")
-                failed_count += 1
-                continue
-            
-            # Выполняем PATCH запрос для обновления правила
-            response = self.api_client.update_policy_user_rule_in_template(
-                template_id, target_rule_id, update_data
-            )
-            
-            if response and response.status_code == 200:
-                print(f"      ✅ Правило '{rule_name}' успешно обновлено")
-                imported_count += 1
-            else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"      ✗ Ошибка при обновлении правила '{rule_name}': {error_msg}")
-                failed_count += 1
-        
-        return imported_count, failed_count
-    
-    def import_template(self, file_path, target_tenant_id=None, preserve_state=True, source_tenant_id=None):
+    def import_template(self, file_path, target_tenant_id=None, preserve_state=True):
         """Импортирует шаблон с раздельной обработкой системных и пользовательских правил"""
         print(f"\nИмпорт шаблона из файла: {file_path}")
         
@@ -1202,16 +602,15 @@ class PolicyTemplateManager(BaseManager):
             return False
         
         template_data = import_data['template']
-        system_rules_data = import_data.get('system_rules', [])
-        user_rules_data = import_data.get('user_rules', [])
+        system_rules_data = import_data.get('system_rules', [])  # Измененные системные правила
+        user_rules_data = import_data.get('user_rules', [])      # Пользовательские правила
         related_actions = import_data.get('related_actions', [])
         
         export_info = import_data.get('export_info', {})
         has_user_rules = template_data.get('has_user_rules', False)
         
         # Извлекаем исходный тенант из метаданных экспорта
-        if not source_tenant_id and 'tenant_id' in export_info:
-            source_tenant_id = export_info['tenant_id']
+        source_tenant_id = export_info.get('tenant_id')
         
         print(f"📊 Данные для импорта:")
         print(f"  - Системных правил с изменениями: {len(system_rules_data)}")
@@ -1307,7 +706,7 @@ class PolicyTemplateManager(BaseManager):
             if original_tenant_id:
                 self.api_client.auth_manager.tenant_id = original_tenant_id
                 self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-
+    
     # ==================== КОПИРОВАНИЕ МЕЖДУ ТЕНАНТАМИ ====================
     
     def copy_template_to_another_tenant(self, source_template_id, target_tenant_id, preserve_state=True):
