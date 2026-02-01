@@ -39,8 +39,8 @@ class PolicyTemplateManager(BaseManager):
         response = self.api_client.get_template_rules(template_id)
         return self._parse_response_items(response)
     
-    def get_template_user_rules(self, template_id):
-        """Получает пользовательские правила шаблона"""
+    def get_user_rules(self, template_id):
+        """Получает правила из набора пользовательских правил"""
         response = self.api_client.get_user_rules(template_id)
         return self._parse_response_items(response)
     
@@ -142,7 +142,21 @@ class PolicyTemplateManager(BaseManager):
     def _get_user_rules_in_template(self, template_id):
         """Получает пользовательские правила в шаблоне (is_system: false)"""
         print("Получение пользовательских правил в шаблоне...")
-        user_rules = self.get_template_user_rules(template_id)
+        
+        # Получаем детали шаблона для определения типа
+        template_details = self.get_template_details(template_id)
+        if not template_details:
+            print("Не удалось получить детали шаблона")
+            return []
+        
+        template_type = template_details.get('type', 'user')
+        
+        if template_type == 'with_user_rules':
+            # Это отдельный набор пользовательских правил
+            user_rules = self.get_user_rules(template_id)
+        else:
+            # Это обычный шаблон с пользовательскими правилами
+            user_rules = self.get_policy_user_rules_in_template(template_id)
         
         if not user_rules:
             print("Пользовательских правил не найдено")
@@ -157,15 +171,32 @@ class PolicyTemplateManager(BaseManager):
             
             print(f"  [{i}/{len(user_rules)}] Получение деталей: {rule_name}")
             
-            rule_details = self.get_user_rule_details(template_id, rule_id)
+            if template_type == 'with_user_rules':
+                rule_details = self.get_user_rule_details(template_id, rule_id)
+            else:
+                rule_details = self.get_policy_user_rule_details_in_template(template_id, rule_id)
+            
             if rule_details:
-                # Сохраняем дополнительные метаданные
+                # Сохраняем тип шаблона для правильной обработки при импорте
+                rule_details['template_type'] = template_type
                 rule_details['is_system'] = False
                 rule_details['original_id'] = rule_id
                 rule_details['original_name'] = rule_name
                 full_rules_data.append(rule_details)
         
         return full_rules_data
+    
+    def get_policy_user_rules_in_template(self, template_id):
+        """Получает пользовательские правила внутри обычного шаблона"""
+        response = self.api_client.get_policy_user_rules_in_template(template_id)
+        return self._parse_response_items(response)
+    
+    def get_policy_user_rule_details_in_template(self, template_id, rule_id):
+        """Получает детали пользовательского правила внутри обычного шаблона"""
+        response = self.api_client.get_policy_user_rule_details_in_template(template_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
     
     def export_template(self, template_id, export_dir="templates_export", include_user_rules=True):
         """Экспортирует шаблон с разделением на системные и пользовательские правила"""
@@ -441,14 +472,53 @@ class PolicyTemplateManager(BaseManager):
         return imported_count, failed_count
     
     def _import_user_rules_to_template(self, template_id, user_rules_data, action_mapping, preserve_state=True):
-        """Импортирует пользовательские правила в шаблон (отдельный процесс)"""
+        """Импортирует пользовательские правила в шаблон с учетом типа правил"""
         if not user_rules_data:
             return 0, 0
+        
+        # Разделяем правила по типу шаблона
+        rules_from_set = []      # Правила из наборов (with_user_rules)
+        rules_from_policy = []   # Правила в обычных шаблонах
+        
+        for rule_data in user_rules_data:
+            template_type = rule_data.get('template_type', 'user')
+            if template_type == 'with_user_rules':
+                rules_from_set.append(rule_data)
+            else:
+                rules_from_policy.append(rule_data)
+        
+        print(f"\n  Импорт {len(user_rules_data)} пользовательских правил:")
+        print(f"    - Из наборов правил: {len(rules_from_set)}")
+        print(f"    - В обычных шаблонах: {len(rules_from_policy)}")
         
         imported_count = 0
         failed_count = 0
         
-        print(f"\n  Импорт {len(user_rules_data)} пользовательских правил (отдельный процесс):")
+        # ШАГ 1: Импорт правил из наборов (with_user_rules) - отдельный процесс
+        if rules_from_set:
+            print(f"\n  ШАГ 1: Импорт пользовательских правил...")
+            print(f"    Импорт {len(rules_from_set)} правил из набора (отдельный процесс):")
+            set_imported, set_failed = self._import_rules_from_user_rules_set(
+                template_id, rules_from_set, action_mapping, preserve_state
+            )
+            imported_count += set_imported
+            failed_count += set_failed
+        
+        # ШАГ 4: Обновление пользовательских правил в обычном шаблоне
+        if rules_from_policy:
+            print(f"\n  ШАГ 4: Обновление пользовательских правил в шаблоне политики...")
+            policy_imported, policy_failed = self._update_user_rules_in_policy_template(
+                template_id, rules_from_policy, action_mapping, preserve_state
+            )
+            imported_count += policy_imported
+            failed_count += policy_failed
+        
+        return imported_count, failed_count
+    
+    def _import_rules_from_user_rules_set(self, template_id, rules_data, action_mapping, preserve_state=True):
+        """Импортирует правила из наборов пользовательских правил через RulesManager"""
+        imported_count = 0
+        failed_count = 0
         
         # Используем RulesManager для копирования пользовательских правил
         from rules_manager import RulesManager
@@ -460,7 +530,7 @@ class PolicyTemplateManager(BaseManager):
         try:
             # Сохраняем пользовательские правила в файлы
             user_rules_files = []
-            for i, rule_data in enumerate(user_rules_data, 1):
+            for i, rule_data in enumerate(rules_data, 1):
                 rule_name = rule_data.get('name', f'Пользовательское правило {i}')
                 
                 # Подготавливаем данные для экспорта
@@ -500,7 +570,7 @@ class PolicyTemplateManager(BaseManager):
                     json.dump(export_rule_data, f, ensure_ascii=False, indent=2)
                 
                 user_rules_files.append(filepath)
-                print(f"    [{i}/{len(user_rules_data)}] Правило '{rule_name}' подготовлено для импорта")
+                print(f"    [{i}/{len(rules_data)}] Правило '{rule_name}' подготовлено для импорта")
             
             # Импортируем пользовательские правила с использованием action_mapping
             print(f"\n    Импорт пользовательских правил через RulesManager...")
@@ -523,13 +593,88 @@ class PolicyTemplateManager(BaseManager):
             
         except Exception as e:
             print(f"      ✗ Ошибка при импорте пользовательских правил: {e}")
-            failed_count = len(user_rules_data)
+            failed_count = len(rules_data)
         finally:
             # Очищаем временные файлы
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             except:
                 pass
+        
+        return imported_count, failed_count
+    
+    def _update_user_rules_in_policy_template(self, template_id, rules_data, action_mapping, preserve_state=True):
+        """Обновляет пользовательские правила в обычном шаблоне через PATCH"""
+        imported_count = 0
+        failed_count = 0
+        
+        # Получаем текущие правила в шаблоне
+        existing_rules = self.get_policy_user_rules_in_template(template_id)
+        if not existing_rules:
+            print(f"    ✗ Не найдено правил в шаблоне")
+            return 0, len(rules_data)
+        
+        # Создаем словарь для быстрого поиска правил по имени
+        existing_rules_dict = {rule.get('name'): rule for rule in existing_rules}
+        
+        for i, rule_data in enumerate(rules_data, 1):
+            rule_name = rule_data.get('name', f'Пользовательское правило {i}')
+            
+            print(f"    [{i}/{len(rules_data)}] Обновление правила: {rule_name}")
+            
+            # Ищем правило в целевом шаблоне по имени
+            if rule_name not in existing_rules_dict:
+                print(f"      ✗ Правило '{rule_name}' не найдено в целевом шаблоне")
+                failed_count += 1
+                continue
+            
+            target_rule = existing_rules_dict[rule_name]
+            target_rule_id = target_rule.get('id')
+            
+            if not target_rule_id:
+                print(f"      ✗ У правила '{rule_name}' нет ID")
+                failed_count += 1
+                continue
+            
+            # Подготавливаем данные для PATCH запроса
+            update_data = {}
+            
+            # Обновляем действия с использованием маппинга
+            original_actions = rule_data.get('actions', [])
+            if original_actions:
+                mapped_actions = []
+                for action_id in original_actions:
+                    if str(action_id) in action_mapping:
+                        mapped_actions.append(action_mapping[str(action_id)])
+                    else:
+                        mapped_actions.append(action_id)  # Оставляем как есть для системных действий
+                
+                if 'configuration' not in update_data:
+                    update_data['configuration'] = {}
+                update_data['configuration']['actions'] = mapped_actions
+            
+            # Сохраняем состояние, если нужно
+            if 'enabled' in rule_data and preserve_state:
+                update_data['enabled'] = rule_data['enabled']
+                print(f"      Состояние: {'включено' if rule_data['enabled'] else 'выключено'} (сохранено)")
+            
+            if not update_data:
+                print(f"      ⚠️ Нет данных для обновления, пропускаем")
+                failed_count += 1
+                continue
+            
+            # Выполняем PATCH запрос для обновления правила
+            response = self.api_client.update_policy_user_rule_in_template(
+                template_id, target_rule_id, update_data
+            )
+            
+            if response and response.status_code == 200:
+                print(f"      ✅ Правило '{rule_name}' успешно обновлено")
+                imported_count += 1
+            else:
+                error_msg = response.text if response else "Неизвестная ошибка"
+                print(f"      ✗ Ошибка при обновлении правила '{rule_name}': {error_msg}")
+                failed_count += 1
         
         return imported_count, failed_count
     
@@ -614,18 +759,17 @@ class PolicyTemplateManager(BaseManager):
             
             print(f"\n3. Импортируем правила...")
             
-            # ВАЖНО: Сначала импортируем пользовательские правила (отдельный процесс)
+            # ШАГ 1: Импорт пользовательских правил из наборов
             user_imported, user_failed = 0, 0
             if has_user_rules and user_rules_data:
-                print("\n  ШАГ 1: Импорт пользовательских правил...")
                 user_imported, user_failed = self._import_user_rules_to_template(
                     target_template_id, user_rules_data, action_mapping, preserve_state
                 )
             
-            # Затем применяем изменения к системным правилам
+            # ШАГ 2: Применение изменений к системным правилам
             system_imported, system_failed = 0, 0
             if system_rules_data:
-                print("\n  ШАГ 2: Применение изменений к системным правилам...")
+                print(f"\n  ШАГ 2: Применение изменений к системным правилам...")
                 system_imported, system_failed = self._import_system_rules_with_overrides(
                     target_template_id, system_rules_data, action_mapping, preserve_state
                 )

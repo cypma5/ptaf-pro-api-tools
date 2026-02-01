@@ -287,21 +287,25 @@ class APIClient:
     def get_policy_user_rules_in_template(self, template_id):
         """Получить пользовательские правила внутри обычного шаблона"""
         return self.error_handler.safe_api_call(
-            self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/user_rules",
+            self._make_api_call, "GET", 
+            f"config/policies/templates/user/{template_id}/user_rules",
             operation_name=f"Получение пользовательских правил в шаблоне {template_id}"
         )
 
     def get_policy_user_rule_details_in_template(self, template_id, rule_id):
         """Получить детали пользовательского правила внутри обычного шаблона"""
         return self.error_handler.safe_api_call(
-            self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/user_rules/{rule_id}",
+            self._make_api_call, "GET", 
+            f"config/policies/templates/user/{template_id}/user_rules/{rule_id}",
             operation_name=f"Получение деталей пользовательского правила {rule_id} в шаблоне"
         )
 
     def update_policy_user_rule_in_template(self, template_id, rule_id, update_data):
         """Обновить пользовательское правило внутри обычного шаблона"""
         return self.error_handler.safe_api_call(
-            self._make_api_call, "PATCH", f"config/policies/templates/user/{template_id}/user_rules/{rule_id}", json=update_data,
+            self._make_api_call, "PATCH", 
+            f"config/policies/templates/user/{template_id}/user_rules/{rule_id}", 
+            json=update_data,
             operation_name=f"Обновление пользовательского правила {rule_id} в шаблоне"
         )
 
@@ -340,7 +344,6 @@ class APIClient:
             self._make_api_call, "PATCH", f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}", json=payload,
             operation_name=f"Изменение состояния правила {rule_id}"
         )
-    
     # ==================== УТИЛИТНЫЕ МЕТОДЫ ====================
     def _parse_response_items(self, response):
         """Парсит ответ API для извлечения items"""
