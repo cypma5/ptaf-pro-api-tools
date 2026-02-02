@@ -1,54 +1,37 @@
-# backends_manager.py
+# backends_manager.py (оптимизированный с BaseManager)
 import json
-from urllib.parse import urljoin
+from base_manager import BaseManager
 
-class BackendsManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
-
+class BackendsManager(BaseManager):
+    def __init__(self, api_client):
+        super().__init__(api_client)
+    
     def get_tenant_backends(self, tenant_id=None):
         """Получает список бекендов тенанта"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        # Если указан tenant_id, обновляем токен для этого тенанта
-        if tenant_id and tenant_id != self.auth_manager.tenant_id:
-            original_tenant_id = self.auth_manager.tenant_id
-            self.auth_manager.tenant_id = tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        if tenant_id and tenant_id != self.api_client.auth_manager.tenant_id:
+            original_tenant_id = self.api_client.auth_manager.tenant_id
+            self.api_client.auth_manager.tenant_id = tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print(f"Не удалось переключиться на тенант {tenant_id}")
-                self.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 return None
         
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/backends")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            backends = response.json()
+        response = self.api_client.get_backends()
+        if response and response.status_code == 200:
             print("Успешно получены бекенды тенанта")
-            return backends
+            return response.json()
         else:
-            print(f"Ошибка при получении бекендов. Код: {response.status_code}, Ответ: {response.text}")
+            print(f"Ошибка при получении бекендов")
             return None
-
+    
     def check_backend_exists(self, backend_data, tenant_id=None):
         """Проверяет, существует ли бекенд с такими же address и port"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return False
-        
-        # Если указан tenant_id, обновляем токен для этого тенанта
-        if tenant_id and tenant_id != self.auth_manager.tenant_id:
-            original_tenant_id = self.auth_manager.tenant_id
-            self.auth_manager.tenant_id = tenant_id
-            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+        if tenant_id and tenant_id != self.api_client.auth_manager.tenant_id:
+            original_tenant_id = self.api_client.auth_manager.tenant_id
+            self.api_client.auth_manager.tenant_id = tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
                 print(f"Не удалось переключиться на тенант {tenant_id}")
-                self.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.tenant_id = original_tenant_id
                 return False
         
         # Получаем все существующие бекенды
@@ -64,7 +47,7 @@ class BackendsManager:
         else:
             return False
         
-        # Проверяем совпадение по address и port
+        # Проверяем совпадение по address, port и protocol
         target_address = backend_data.get('address')
         target_port = backend_data.get('port')
         target_protocol = backend_data.get('protocol')
@@ -76,14 +59,12 @@ class BackendsManager:
                 return True
         
         return False
-
+    
     def create_backend(self, backend_data):
         """Создает новый бекенд"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/backends")
-        
-        response = self.make_request("POST", url, json=backend_data)
+        response = self.api_client.create_backend(backend_data)
         return response
-
+    
     def _clean_backends_data(self, backends_data):
         """Очищает данные бекендов - удаляет traffic_profiles и id"""
         if isinstance(backends_data, dict) and 'items' in backends_data:

@@ -1,141 +1,94 @@
-# actions_manager.py
+# actions_manager.py (оптимизированный с APIClient и BaseManager)
 import json
-from urllib.parse import urljoin
+from base_manager import BaseManager
 
-class ActionsManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
-
+class ActionsManager(BaseManager):
+    def __init__(self, api_client):
+        super().__init__(api_client)
+    
+    # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
+    
     def get_user_templates(self):
         """Получает список пользовательских шаблонов политик"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            templates = response.json()
-            if isinstance(templates, dict) and 'items' in templates:
-                return templates['items']
-            elif isinstance(templates, list):
-                return templates
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(templates)}")
-                return None
-        else:
-            print(f"Ошибка при получении пользовательских шаблонов. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_user_templates()
+        return self._parse_response_items(response)
+    
     def get_template_rules(self, template_id):
         """Получает список правил для шаблона политики"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            rules = response.json()
-            if isinstance(rules, dict) and 'items' in rules:
-                return rules['items']
-            elif isinstance(rules, list):
-                return rules
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(rules)}")
-                return None
-        else:
-            print(f"Ошибка при получении правил шаблона. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_template_rules(template_id)
+        return self._parse_response_items(response)
+    
     def get_rule_details(self, template_id, rule_id):
         """Получает детали конкретного правила"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
+        response = self.api_client.get_template_rule_details(template_id, rule_id)
+        if response and response.status_code == 200:
             return response.json()
-        except json.JSONDecodeError:
-            return None
-
+        return None
+    
     def update_rule_actions_only(self, template_id, rule_id, new_actions):
         """Обновляет только действия в правиле (оптимизированный PATCH)"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/templates/user/{template_id}/rules/{rule_id}")
-        
-        # Отправляем только поле actions
-        update_data = {
-            "actions": new_actions
-        }
-        
-        response = self.make_request("PATCH", url, json=update_data)
-        return response
-
+        update_data = {"actions": new_actions}
+        return self.api_client.update_template_rule(template_id, rule_id, update_data)
+    
     def get_available_actions(self):
         """Получает список доступных действий"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/actions")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            actions = response.json()
-            if isinstance(actions, dict) and 'items' in actions:
-                return actions['items']
-            elif isinstance(actions, list):
-                return actions
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(actions)}")
-                return None
-        else:
-            print(f"Ошибка при получении списка действий. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_actions()
+        return self._parse_response_items(response)
+    
     def get_action_types(self):
         """Получает список типов действий"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/action_types")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            action_types = response.json()
-            if isinstance(action_types, dict) and 'items' in action_types:
-                return action_types['items']
-            elif isinstance(action_types, list):
-                return action_types
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(action_types)}")
-                return None
-        else:
-            print(f"Ошибка при получении типов действий. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
+        response = self.api_client.get_action_types()
+        return self._parse_response_items(response)
+    
+    def get_web_app_policies(self):
+        """Получает список политик веб приложений"""
+        response = self.api_client.get_policies()
+        return self._parse_response_items(response)
+    
+    def get_policy_system_rules(self, policy_id):
+        """Получает список системных правил для политики веб приложения"""
+        response = self.api_client.get_policy_system_rules(policy_id)
+        rules = self._parse_response_items(response)
+        if rules:
+            for rule in rules:
+                rule['is_user_rule'] = False
+        return rules
+    
+    def get_policy_user_rules(self, policy_id):
+        """Получает список пользовательских правил для политики веб приложения"""
+        response = self.api_client.get_policy_user_rules(policy_id)
+        rules = self._parse_response_items(response)
+        if rules:
+            for rule in rules:
+                rule['is_user_rule'] = True
+        return rules
+    
+    def get_policy_system_rule_details(self, policy_id, rule_id):
+        """Получает детали конкретного системного правила политики"""
+        response = self.api_client.get_policy_system_rule_details(policy_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
+    def get_policy_user_rule_details(self, policy_id, rule_id):
+        """Получает детали конкретного пользовательского правила политики"""
+        response = self.api_client.get_policy_user_rule_details(policy_id, rule_id)
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+    
+    def update_policy_system_rule_actions_only(self, policy_id, rule_id, new_actions):
+        """Обновляет только действия в системном правиле политики"""
+        update_data = {"actions": new_actions}
+        return self.api_client.update_policy_system_rule(policy_id, rule_id, update_data)
+    
+    def update_policy_user_rule_actions_only(self, policy_id, rule_id, new_actions):
+        """Обновляет только действия в пользовательском правиле политики"""
+        update_data = {"actions": new_actions}
+        return self.api_client.update_policy_user_rule(policy_id, rule_id, update_data)
+    
+    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+    
     def _get_actions_by_type(self, action_key):
         """Получает действия определенного типа"""
         actions = self.get_available_actions()
@@ -157,218 +110,23 @@ class ActionsManager:
                 filtered_actions.append(action)
         
         return filtered_actions
-
+    
     def _select_template(self):
         """Выбор шаблона из списка"""
         templates = self.get_user_templates()
-        if not templates:
-            print("Не найдено пользовательских шаблонов политик")
-            return None
-        
-        print("\nДоступные шаблоны политик:")
-        for i, template in enumerate(templates, 1):
-            print(f"{i}. {template.get('name', 'Без названия')} (ID: {template.get('id')})")
-        
-        template_index = self._select_index(templates, "Выберите номер шаблона (или 'q' для отмены): ")
-        if template_index is None:
-            return None
-        
-        return templates[template_index]
-
+        return self._select_item_from_list(templates, "Доступные шаблоны политик")
+    
     def _select_action_with_prompt(self, actions, prompt):
         """Выбор действия из списка с кастомным промптом"""
-        if not actions:
-            return None
-        
-        print(f"\n{prompt}")
-        for i, action in enumerate(actions, 1):
-            print(f"{i}. {action.get('name')} (ID: {action.get('id')})")
-        
-        action_index = self._select_index(actions, "Ваш выбор (или 'q' для отмены): ")
-        if action_index is None:
-            return None
-        
-        return actions[action_index]
-
-    def _select_index(self, items, prompt):
-        """Выбор индекса из списка"""
-        while True:
-            try:
-                choice = input(prompt).strip()
-                if choice.lower() == 'q':
-                    return None
-                
-                index = int(choice) - 1
-                if 0 <= index < len(items):
-                    return index
-                else:
-                    print("Некорректный номер")
-            except ValueError:
-                print("Пожалуйста, введите число")
-
-    def _select_policy(self, policies):
+        return self._select_item_from_list(actions, prompt)
+    
+    def _select_policy(self):
         """Выбор политики из списка"""
-        if not policies:
-            print("Не найдено политик веб приложений")
-            return None
-        
-        print("\nДоступные политики веб приложений:")
-        for i, policy in enumerate(policies, 1):
-            print(f"{i}. {policy.get('name', 'Без названия')} (ID: {policy.get('id')})")
-        
-        policy_index = self._select_index(policies, "Выберите номер политики (или 'q' для отмены): ")
-        if policy_index is None:
-            return None
-        
-        return policies[policy_index]
-
-    def get_web_app_policies(self):
-        """Получает список политик веб приложений"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            policies = response.json()
-            if isinstance(policies, dict) and 'items' in policies:
-                return policies['items']
-            elif isinstance(policies, list):
-                return policies
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(policies)}")
-                return None
-        else:
-            print(f"Ошибка при получении политик веб приложений. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
-    def get_policy_system_rules(self, policy_id):
-        """Получает список системных правил для политики веб приложения"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/rules")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            rules = response.json()
-            if isinstance(rules, dict) and 'items' in rules:
-                rules_data = rules['items']
-                # Помечаем системные правила
-                for rule in rules_data:
-                    rule['is_user_rule'] = False
-                return rules_data
-            elif isinstance(rules, list):
-                # Помечаем системные правила
-                for rule in rules:
-                    rule['is_user_rule'] = False
-                return rules
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(rules)}")
-                return None
-        else:
-            print(f"Ошибка при получении системных правил политики. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
-    def get_policy_user_rules(self, policy_id):
-        """Получает список пользовательских правил для политики веб приложения"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/user_rules")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            rules = response.json()
-            if isinstance(rules, dict) and 'items' in rules:
-                rules_data = rules['items']
-                # Помечаем пользовательские правила
-                for rule in rules_data:
-                    rule['is_user_rule'] = True
-                return rules_data
-            elif isinstance(rules, list):
-                # Помечаем пользовательские правила
-                for rule in rules:
-                    rule['is_user_rule'] = True
-                return rules
-            else:
-                print(f"Неподдерживаемый формат ответа. Получен: {type(rules)}")
-                return None
-        else:
-            print(f"Ошибка при получении пользовательских правил политики. Код: {response.status_code}, Ответ: {response.text}")
-            return None
-
-    def get_policy_system_rule_details(self, policy_id, rule_id):
-        """Получает детали конкретного системного правила политики"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/rules/{rule_id}")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
-            return response.json()
-        except json.JSONDecodeError:
-            return None
-
-    def get_policy_user_rule_details(self, policy_id, rule_id):
-        """Получает детали конкретного пользовательского правила политики"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/user_rules/{rule_id}")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        try:
-            return response.json()
-        except json.JSONDecodeError:
-            return None
-
-    def update_policy_system_rule_actions_only(self, policy_id, rule_id, new_actions):
-        """Обновляет только действия в системном правиле политики (оптимизированный PATCH)"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/rules/{rule_id}")
-        
-        # Отправляем только поле actions
-        update_data = {
-            "actions": new_actions
-        }
-        
-        response = self.make_request("PATCH", url, json=update_data)
-        return response
-
-    def update_policy_user_rule_actions_only(self, policy_id, rule_id, new_actions):
-        """Обновляет только действия в пользовательском правиле политики (оптимизированный PATCH)"""
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/policies/{policy_id}/user_rules/{rule_id}")
-        
-        # Отправляем только поле actions
-        update_data = {
-            "actions": new_actions
-        }
-        
-        response = self.make_request("PATCH", url, json=update_data)
-        return response
-
+        policies = self.get_web_app_policies()
+        return self._select_item_from_list(policies, "Доступные политики веб приложений")
+    
+    # ==================== ОПЕРАЦИИ С ДЕЙСТВИЯМИ ====================
+    
     def add_syslog_action_to_template(self, template_id, syslog_action_id):
         """Добавляет действие send_to_syslog в правила шаблона"""
         rules = self.get_template_rules(template_id)
@@ -398,9 +156,9 @@ class ActionsManager:
             # Добавляем действие
             new_actions = current_actions + [syslog_action_id]
             
-            # Обновляем только действия (оптимизированный PATCH)
+            # Обновляем только действия
             response = self.update_rule_actions_only(template_id, rule_id, new_actions)
-            if response and response.status_code == 200:
+            if self._check_response(response):
                 print(f"Успешно добавлено действие в правило '{rule_name}'")
                 total_updated += 1
             else:
@@ -408,7 +166,7 @@ class ActionsManager:
                 print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
         
         return total_updated, total_rules
-
+    
     def add_syslog_action_to_policy(self, policy_id, syslog_action_id):
         """Добавляет действие send_to_syslog в правила политики"""
         # Получаем все правила политики (системные и пользовательские)
@@ -452,21 +210,22 @@ class ActionsManager:
             # Добавляем действие
             new_actions = current_actions + [syslog_action_id]
             
-            # Обновляем только действия (оптимизированный PATCH)
+            # Обновляем только действия
             if is_user_rule:
                 response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
             else:
                 response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 
-            if response and response.status_code == 200:
-                print(f"Успешно добавлено действие в правило '{rule_name}' ({'пользовательское' if is_user_rule else 'системное'})")
+            if self._check_response(response):
+                rule_type = 'пользовательское' if is_user_rule else 'системное'
+                print(f"Успешно добавлено действие в правило '{rule_name}' ({rule_type})")
                 total_updated += 1
             else:
                 error_msg = response.text if response else "Неизвестная ошибка"
                 print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
         
         return total_updated, total_rules
-
+    
     def replace_actions_in_template(self, template_id, old_action_id, new_action_id):
         """Заменяет действие в указанном шаблоне политики"""
         rules = self.get_template_rules(template_id)
@@ -496,9 +255,9 @@ class ActionsManager:
             # Заменяем действие
             new_actions = [new_action_id if action_id == old_action_id else action_id for action_id in current_actions]
             
-            # Обновляем только действия (оптимизированный PATCH)
+            # Обновляем только действия
             response = self.update_rule_actions_only(template_id, rule_id, new_actions)
-            if response and response.status_code == 200:
+            if self._check_response(response):
                 print(f"Успешно заменено действие в правиле '{rule_name}'")
                 total_replaced += 1
             else:
@@ -506,7 +265,7 @@ class ActionsManager:
                 print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
         
         return total_replaced, total_rules
-
+    
     def replace_actions_in_policy(self, policy_id, old_action_id, new_action_id):
         """Заменяет действие в указанной политике веб приложения"""
         # Получаем все правила политики (системные и пользовательские)
@@ -550,21 +309,24 @@ class ActionsManager:
             # Заменяем действие
             new_actions = [new_action_id if action_id == old_action_id else action_id for action_id in current_actions]
             
-            # Обновляем только действия (оптимизированный PATCH)
+            # Обновляем только действия
             if is_user_rule:
                 response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
             else:
                 response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 
-            if response and response.status_code == 200:
-                print(f"Успешно заменено действие в правиле '{rule_name}' ({'пользовательское' if is_user_rule else 'системное'})")
+            if self._check_response(response):
+                rule_type = 'пользовательское' if is_user_rule else 'системное'
+                print(f"Успешно заменено действие в правиле '{rule_name}' ({rule_type})")
                 total_replaced += 1
             else:
                 error_msg = response.text if response else "Неизвестная ошибка"
                 print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
         
         return total_replaced, total_rules
-
+    
+    # ==================== ИНТЕРАКТИВНОЕ УПРАВЛЕНИЕ ====================
+    
     def manage_actions_operations(self):
         """Основное управление операциями с действиями"""
         while True:
@@ -580,7 +342,7 @@ class ActionsManager:
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _perform_actions_operation(self):
         """Выполнение операции с действиями"""
         # Шаг 1: Выбор типа действия
@@ -588,8 +350,8 @@ class ActionsManager:
         if not action_type:
             return
         
-        # Шаг 2: Выбор тенанта
-        if not self.auth_manager.tenant_id:
+        # Шаг 2: Выбор тенанта (уже должен быть выбран)
+        if not self.api_client.auth_manager.tenant_id:
             print("Сначала необходимо выбрать тенант")
             return
         
@@ -605,7 +367,7 @@ class ActionsManager:
         
         # Шаг 5: Выполнение операции
         self._execute_operation(action_type, action_data, object_type)
-
+    
     def _select_action_type(self):
         """Выбор типа действия"""
         print("\n=== Выберите тип действия ===")
@@ -630,7 +392,7 @@ class ActionsManager:
                 return None
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _select_specific_action(self, action_type):
         """Выбор конкретного действия"""
         if action_type['type'] == 'add':
@@ -685,7 +447,7 @@ class ActionsManager:
                 'new_action_id': new_action['id'],
                 'new_action_name': new_action.get('name')
             }
-
+    
     def _select_object_type(self):
         """Выбор объекта для применения действий"""
         print("\n=== Выберите объект для применения ===")
@@ -704,7 +466,7 @@ class ActionsManager:
                 return None
             else:
                 print("Некорректный выбор. Попробуйте снова.")
-
+    
     def _execute_operation(self, action_type, action_data, object_type):
         """Выполнение выбранной операции"""
         if object_type == 'template':
@@ -722,8 +484,7 @@ class ActionsManager:
             else:
                 confirm_msg = f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' в шаблоне '{template_name}'?"
             
-            confirm = input(f"\n{confirm_msg} (y/n): ").lower()
-            if confirm != 'y':
+            if not self._confirm_action(confirm_msg):
                 print("Отмена операции")
                 return
             
@@ -741,12 +502,7 @@ class ActionsManager:
         
         else:  # policy
             # Выбор политики
-            policies = self.get_web_app_policies()
-            if not policies:
-                print("Не найдено политик веб приложений")
-                return
-            
-            policy = self._select_policy(policies)
+            policy = self._select_policy()
             if not policy:
                 return
             
@@ -759,8 +515,7 @@ class ActionsManager:
             else:
                 confirm_msg = f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' в политике '{policy_name}'?"
             
-            confirm = input(f"\n{confirm_msg} (y/n): ").lower()
-            if confirm != 'y':
+            if not self._confirm_action(confirm_msg):
                 print("Отмена операции")
                 return
             
@@ -775,3 +530,135 @@ class ActionsManager:
                     policy_id, action_data['old_action_id'], action_data['new_action_id']
                 )
                 print(f"\nИтог: заменено действий в {total_replaced} из {total_rules} правил")
+
+
+    def get_custom_actions(self):
+        """Получает список пользовательских действий"""
+        response = self.api_client.get_actions()
+        all_actions = self._parse_response_items(response)
+        
+        if all_actions:
+            # Фильтруем только пользовательские действия (is_system = False)
+            custom_actions = [action for action in all_actions if not action.get('is_system', True)]
+            print(f"Успешно получены пользовательские действия: {len(custom_actions)} шт.")
+            return custom_actions
+        return None
+
+    def get_actions_by_name_and_type(self, action_name, action_type_id):
+        """Находит действие по имени и типу"""
+        actions = self.get_available_actions()
+        if not actions:
+            return None
+        
+        for action in actions:
+            if (action.get('name') == action_name and 
+                action.get('type_id') == action_type_id):
+                return action
+        return None
+
+    def find_or_create_action(self, action_data):
+        """Находит существующее действие или создает новое"""
+        action_name = action_data.get('name')
+        action_type_id = action_data.get('type_id')
+        
+        if not action_name or not action_type_id:
+            print(f"❌ Неверные данные действия: имя={action_name}, тип={action_type_id}")
+            return None
+        
+        # Ищем существующее действие
+        existing_action = self.get_actions_by_name_and_type(action_name, action_type_id)
+        if existing_action:
+            print(f"  ✓ Действие '{action_name}' уже существует (ID: {existing_action.get('id')})")
+            return existing_action
+        
+        # Создаем новое действие
+        print(f"  ✗ Действие '{action_name}' не найдено, создаем...")
+        create_data = action_data.copy()
+        
+        # Удаляем системные поля
+        create_data.pop('id', None)
+        create_data.pop('is_system', None)
+        
+        response = self.api_client.create_action(create_data)
+        if response and response.status_code == 201:
+            new_action = response.json()
+            print(f"  ✓ Действие '{action_name}' создано (ID: {new_action.get('id')})")
+            return new_action
+        else:
+            error_msg = response.text if response else "Неизвестная ошибка"
+            print(f"  ✗ Ошибка при создании действия '{action_name}': {error_msg}")
+            return None
+
+    def create_action_mapping(self, source_actions, target_tenant_id=None):
+        """Создает маппинг ID действий между тенантами"""
+        if target_tenant_id and target_tenant_id != self.api_client.auth_manager.tenant_id:
+            original_tenant_id = self.api_client.auth_manager.tenant_id
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на тенант {target_tenant_id}")
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                return {}
+        
+        action_mapping = {}
+        
+        for action in source_actions:
+            original_action_id = action.get('id')
+            action_name = action.get('name')
+            action_type_id = action.get('type_id')
+            
+            # Пропускаем системные действия
+            if action.get('is_system', True):
+                continue
+            
+            # Ищем или создаем действие в целевом тенанте
+            target_action = self.find_or_create_action(action)
+            if target_action:
+                action_mapping[original_action_id] = target_action.get('id')
+        
+        return action_mapping
+
+    def copy_actions_between_tenants(self, source_tenant_id, target_tenant_id, actions_to_copy="all"):
+        """Копирует действия из одного тенанта в другой"""
+        print(f"\nКопирование действий из тенанта {source_tenant_id} в {target_tenant_id}")
+        
+        # Сохраняем текущий тенант
+        original_tenant_id = self.api_client.auth_manager.tenant_id
+        
+        try:
+            # Получаем действия из исходного тенанта
+            self.api_client.auth_manager.tenant_id = source_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на исходный тенант {source_tenant_id}")
+                return {}
+            
+            custom_actions = self.get_custom_actions()
+            if not custom_actions:
+                print("Не найдено пользовательских действий для копирования")
+                return {}
+            
+            # Фильтруем действия по выбранному списку
+            if actions_to_copy != "all":
+                custom_actions = [action for action in custom_actions if action.get('name') in actions_to_copy]
+            
+            if not custom_actions:
+                print("После фильтрации не осталось действий для копирования")
+                return {}
+            
+            print(f"Найдено {len(custom_actions)} действий для копирования")
+            
+            # Создаем маппинг в целевом тенанте
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print(f"❌ Не удалось переключиться на целевой тенант {target_tenant_id}")
+                return {}
+            
+            action_mapping = self.create_action_mapping(custom_actions, target_tenant_id)
+            
+            print(f"Создано маппинг для {len(action_mapping)} действий")
+            return action_mapping
+            
+        finally:
+            # Восстанавливаем оригинальный тенант
+            if original_tenant_id:
+                self.api_client.auth_manager.tenant_id = original_tenant_id
+                self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)

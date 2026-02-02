@@ -1,65 +1,37 @@
-# traffic_settings.py
+# traffic_settings.py (оптимизированный с BaseManager)
 import os
 import json
 import datetime
-from urllib.parse import urljoin
+from base_manager import BaseManager
 
-class TrafficSettingsManager:
-    def __init__(self, auth_manager, make_request_func):
-        self.auth_manager = auth_manager
-        self.make_request = make_request_func
-
+class TrafficSettingsManager(BaseManager):
+    def __init__(self, api_client):
+        super().__init__(api_client)
+    
     def get_traffic_settings(self):
         """Получает текущие настройки трафика"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return None
-        
-        if not self.auth_manager.tenant_id:
-            print("Не выбран тенант")
-            return None
-        
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/traffic_settings")
-        
-        response = self.make_request("GET", url)
-        if not response:
-            return None
-            
-        if response.status_code == 200:
-            settings = response.json()
+        response = self.api_client.get_traffic_settings()
+        if response and response.status_code == 200:
             print("Успешно получены параметры traffic_settings")
-            return settings
+            return response.json()
         else:
-            print(f"Ошибка при получении параметров traffic_settings. Код: {response.status_code}, Ответ: {response.text}")
+            print(f"Ошибка при получении параметров traffic_settings")
             return None
-
+    
     def update_traffic_settings(self, settings_data):
         """Обновляет настройки трафика"""
-        if not self.auth_manager.access_token:
-            if not self.auth_manager.get_jwt_tokens(self.make_request):
-                return False
-        
-        if not self.auth_manager.tenant_id:
-            print("Не выбран тенант")
-            return False
-        
         # Создаем бекап перед изменением
         if not self._create_backup():
             print("Предупреждение: не удалось создать бекап перед изменением")
         
-        url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/config/traffic_settings")
-        
-        response = self.make_request("PATCH", url, json=settings_data)
-        if not response:
-            return False
-            
-        if response.status_code == 200:
+        response = self.api_client.update_traffic_settings(settings_data)
+        if response and response.status_code == 200:
             print("Параметры traffic_settings успешно обновлены")
             return True
         else:
-            print(f"Ошибка при обновлении параметров traffic_settings. Код: {response.status_code}, Ответ: {response.text}")
+            print(f"Ошибка при обновлении параметров traffic_settings")
             return False
-
+    
     def _create_backup(self):
         """Создает бекап текущих настроек"""
         current_settings = self.get_traffic_settings()
@@ -67,7 +39,7 @@ class TrafficSettingsManager:
             return False
         
         # Создаем директорию для бекапов
-        backup_dir = os.path.join("traffic_settings", self.auth_manager.tenant_id)
+        backup_dir = os.path.join("traffic_settings", self.api_client.auth_manager.tenant_id)
         os.makedirs(backup_dir, exist_ok=True)
         
         # Формируем имя файла с датой и временем
@@ -83,7 +55,7 @@ class TrafficSettingsManager:
         except Exception as e:
             print(f"Ошибка при сохранении бекапа: {e}")
             return False
-
+    
     def _show_current_settings(self, settings):
         """Выводит текущие настройки"""
         print("\nТекущие настройки:")
