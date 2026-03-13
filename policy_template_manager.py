@@ -100,6 +100,10 @@ class PolicyTemplateManager(BaseManager):
         """Создает пользовательское правило в шаблоне"""
         response = self.api_client.create_user_rule(template_id, rule_data)
         return response
+
+    def create_rule(self, template_id, rule_data):
+        """Создает правило в шаблоне (для совместимости с _import_user_rules_changes)."""
+        return self.api_client.create_user_rule(template_id, rule_data)
     
     def update_rule(self, template_id, rule_id, update_data):
         """Обновляет правило"""
@@ -112,6 +116,52 @@ class PolicyTemplateManager(BaseManager):
     def update_rule_aggregation(self, template_id, rule_id, aggregation_data):
         """Обновляет настройки агрегации"""
         return self.api_client.update_template_rule_aggregation(template_id, rule_id, aggregation_data)
+
+    def _print_rule_update_error(self, response, update_data, context="правила", error_verb="обновлении"):
+        """Выводит подробную информацию об ошибке обновления/создания правила: запрос, код, тело ответа."""
+        print(f"      ✗ Ошибка при {error_verb} {context}:")
+        if response is not None:
+            code = getattr(response, "status_code", None)
+            body = getattr(response, "text", None) or "(пусто)"
+            req = getattr(response, "request", None)
+            method = req.method if req else "PATCH"
+            url = req.url if req else ""
+            print(f"        REQUEST: {method} {url}")
+            try:
+                print(f"        Request body: {json.dumps(update_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {update_data}")
+            print(f"        Код ответа: {code}")
+            print(f"        Тело ответа: {body}")
+        else:
+            print(f"        Неизвестная ошибка (нет ответа от сервера)")
+            try:
+                print(f"        Request body: {json.dumps(update_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {update_data}")
+
+    def _print_aggregation_update_error(self, agg_response, aggregation_data):
+        """Выводит подробную информацию об ошибке обновления агрегации: запрос, код, тело ответа."""
+        print(f"      ⚠️ Ошибка при обновлении агрегации:")
+        if agg_response is not None:
+            code = getattr(agg_response, "status_code", None)
+            body = getattr(agg_response, "text", None) or "(пусто)"
+            req = getattr(agg_response, "request", None)
+            method = req.method if req else "PATCH"
+            url = req.url if req else ""
+            print(f"        REQUEST: {method} {url}")
+            try:
+                print(f"        Request body: {json.dumps(aggregation_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {aggregation_data}")
+            print(f"        Код ответа: {code}")
+            print(f"        Тело ответа: {body}")
+        else:
+            print(f"        Неизвестная ошибка (нет ответа от сервера)")
+            try:
+                print(f"        Request body: {json.dumps(aggregation_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {aggregation_data}")
     
     # ==================== ЭКСПОРТ ШАБЛОНА ====================
     
@@ -208,6 +258,33 @@ class PolicyTemplateManager(BaseManager):
         
         return full_rules_data
     
+    def _get_user_rule_names_enabled_in_policies(self, template_id):
+        """
+        Возвращает множество имён пользовательских правил, которые включены (enabled=True)
+        в политике безопасности хотя бы одного веб-приложения с данным шаблоном.
+        """
+        enabled_names = set()
+        try:
+            apps_resp = self.api_client.get_applications()
+            applications = self._parse_response_items(apps_resp) or []
+            for app in applications:
+                if app.get('policy_template_id') != template_id:
+                    continue
+                policy_id = app.get('policy_id')
+                if not policy_id:
+                    continue
+                rules_resp = self.api_client.get_policy_user_rules(policy_id)
+                rules = self._parse_response_items(rules_resp) or []
+                for r in rules:
+                    if r.get('enabled') is True:
+                        name = r.get('name')
+                        if name:
+                            enabled_names.add(name)
+        except Exception as e:
+            print(f"  ⚠️ Не удалось получить состояние правил в политиках приложений: {e}")
+            return None
+        return enabled_names
+    
     def export_template(self, template_id, export_dir="templates_export", include_user_rules=True):
         """Экспортирует шаблон с разделением на системные и пользовательские правила"""
         print(f"\nЭкспорт шаблона политики ID: {template_id}")
@@ -226,6 +303,25 @@ class PolicyTemplateManager(BaseManager):
         user_rules_data = []
         if has_user_rules and include_user_rules:
             user_rules_data = self._get_user_rules_in_template(template_id)
+            # Переносим только правила, включённые хотя бы в одном месте:
+            # 1) в наборе пользовательских правил, 2) в шаблоне политики, 3) в политике безопасности приложения
+            enabled_in_policies = self._get_user_rule_names_enabled_in_policies(template_id)
+            if user_rules_data:
+                total = len(user_rules_data)
+                def should_transfer_rule(r):
+                    name = r.get('name') or r.get('original_name')
+                    # Включено в наборе или в шаблоне (enabled в деталях правила)
+                    if r.get('enabled') is True:
+                        return True
+                    # Включено в политике безопасности хотя бы одного приложения
+                    if enabled_in_policies is not None and name and name in enabled_in_policies:
+                        return True
+                    return False
+                user_rules_data = [r for r in user_rules_data if should_transfer_rule(r)]
+                skipped = total - len(user_rules_data)
+                if skipped > 0:
+                    print(f"  Пропущено пользовательских правил (нигде не включены): {skipped}")
+                print(f"  К переносу пользовательских правил (вкл. в наборе/шаблоне/политике): {len(user_rules_data)}")
         
         if not system_rules_data and not user_rules_data:
             print("⚠️ В шаблоне нет правил для экспорта")
@@ -545,38 +641,117 @@ class PolicyTemplateManager(BaseManager):
             if response and response.status_code == 200:
                 print(f"      ✅ Изменения успешно применены")
                 
-                # 5. Обновляем настройки агрегации если есть
+                # 5. Обновляем настройки агрегации если есть и агрегация включена
                 if 'aggregation' in rule_data and rule_data['aggregation']:
                     aggregation_data = rule_data['aggregation'].copy()
-                    
-                    # Применяем маппинг глобальных списков в агрегации
-                    if global_list_mapping and 'global_list_id' in aggregation_data:
-                        gl_id = aggregation_data['global_list_id']
-                        if str(gl_id) in global_list_mapping:
-                            aggregation_data['global_list_id'] = global_list_mapping[str(gl_id)]
-                            print(f"      Обновлен глобальный список в агрегации")
-                    
-                    agg_response = self.update_rule_aggregation(template_id, target_rule_id, aggregation_data)
-                    
-                    if agg_response and agg_response.status_code == 200:
-                        print(f"      ✅ Настройки агрегации обновлены")
+                    if aggregation_data.get('enabled') is False:
+                        print(f"      Агрегация выключена — обновление агрегации пропущено")
                     else:
-                        error_msg = agg_response.text if agg_response else "Неизвестная ошибка"
-                        print(f"      ⚠️ Ошибка при обновлении агрегации: {error_msg}")
+                        # Применяем маппинг глобальных списков в агрегации (ключи в маппинге — строки)
+                        if global_list_mapping and 'global_list_id' in aggregation_data:
+                            gl_id = aggregation_data['global_list_id']
+                            mapped_id = global_list_mapping.get(str(gl_id), gl_id)
+                            aggregation_data['global_list_id'] = mapped_id
+                            if mapped_id != gl_id:
+                                print(f"      Обновлен глобальный список в агрегации: {gl_id} -> {mapped_id}")
+                            elif global_list_mapping:
+                                print(f"      ⚠ Глобальный список {gl_id} не найден в маппинге, отправка как есть (возможна ошибка reference_not_exist)")
+                        
+                        agg_response = self.update_rule_aggregation(template_id, target_rule_id, aggregation_data)
+                        
+                        if agg_response and agg_response.status_code == 200:
+                            print(f"      ✅ Настройки агрегации обновлены")
+                        else:
+                            self._print_aggregation_update_error(agg_response, aggregation_data)
                 
                 imported_count += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"      ✗ Ошибка при обновлении правила: {error_msg}")
+                self._print_rule_update_error(response, update_data, "правила (системное)")
                 failed_count += 1
         
         return imported_count, failed_count
 
-    def _import_user_rules_to_template(self, template_id, user_rules_data, action_mapping, preserve_state=True,
-                                      source_tenant_id=None, target_tenant_id=None):
-        """Импортирует пользовательские правила в шаблон, используя логику 'Копирование правил'"""
+    def _import_user_rules_from_file_data(self, template_id, user_rules_data, action_mapping, global_list_mapping,
+                                          preserve_state):
+        """Создаёт в целевом шаблоне только правила из user_rules_data (импорт из файла), без экспорта всего набора."""
         if not user_rules_data:
             return 0, 0
+        imported_count = 0
+        failed_count = 0
+        print(f"\n  Создание пользовательских правил из файла ({len(user_rules_data)} правил)...")
+        existing = self.get_policy_user_rules_in_template(template_id) or []
+        existing_by_name = {r.get('name'): r for r in existing if r.get('name')}
+        for i, rule_data in enumerate(user_rules_data, 1):
+            rule_name = rule_data.get('name', f'Пользовательское правило {i}')
+            if rule_name in existing_by_name:
+                print(f"    [{i}/{len(user_rules_data)}] Правило '{rule_name}' уже есть в шаблоне, пропускаем создание")
+                continue
+            create_data = rule_data.copy()
+            for field in ('id', 'original_id', 'original_name', 'template_type', 'has_user_rules'):
+                create_data.pop(field, None)
+            actions = create_data.get('actions') or (create_data.get('configuration') or {}).get('actions') or []
+            if actions and action_mapping:
+                mapped = [action_mapping.get(str(aid), aid) for aid in actions]
+                if 'configuration' not in create_data:
+                    create_data['configuration'] = {}
+                create_data['configuration']['actions'] = mapped
+            if global_list_mapping and create_data.get('configuration'):
+                config = create_data['configuration']
+                if config.get('variables', {}).get('dynamic_global_lists', {}).get('value'):
+                    dgl = config['variables']['dynamic_global_lists']
+                    dgl['value'] = [global_list_mapping.get(str(lid), lid) for lid in dgl['value']]
+                for param in (config.get('parameters') or []):
+                    if 'global_list_id' in param and param['global_list_id']:
+                        param['global_list_id'] = global_list_mapping.get(str(param['global_list_id']), param['global_list_id'])
+            if global_list_mapping and create_data.get('aggregation', {}).get('global_list_id'):
+                create_data['aggregation']['global_list_id'] = global_list_mapping.get(
+                    str(create_data['aggregation']['global_list_id']), create_data['aggregation']['global_list_id'])
+            if preserve_state and 'enabled' in rule_data:
+                create_data['enabled'] = rule_data['enabled']
+            template_type = rule_data.get('template_type', 'user')
+            try:
+                if template_type == 'with_user_rules':
+                    resp = self.create_user_rule(template_id, create_data)
+                else:
+                    resp = self.create_rule(template_id, create_data)
+                if resp and resp.status_code in (200, 201):
+                    if preserve_state and 'enabled' in rule_data and resp.status_code == 201:
+                        try:
+                            created = resp.json() or {}
+                            rid = created.get('id')
+                            if rid and template_type != 'with_user_rules':
+                                self.update_policy_user_rule_in_template(template_id, rid, {"enabled": rule_data["enabled"]})
+                            elif rid:
+                                self.update_user_rule(template_id, rid, {"enabled": rule_data["enabled"]})
+                        except Exception:
+                            pass
+                    print(f"    [{i}/{len(user_rules_data)}] ✅ Правило '{rule_name}' создано")
+                    imported_count += 1
+                else:
+                    msg = getattr(resp, 'text', None) or 'Неизвестная ошибка'
+                    print(f"    [{i}/{len(user_rules_data)}] ✗ Ошибка создания '{rule_name}': {msg}")
+                    failed_count += 1
+            except Exception as e:
+                print(f"    [{i}/{len(user_rules_data)}] ✗ Ошибка создания '{rule_name}': {e}")
+                failed_count += 1
+        return imported_count, failed_count
+
+    def _import_user_rules_to_template(self, template_id, user_rules_data, action_mapping, preserve_state=True,
+                                      source_tenant_id=None, target_tenant_id=None, use_file_data_only=False,
+                                      global_list_mapping=None):
+        """Импортирует пользовательские правила в шаблон.
+
+        Если use_file_data_only=True (импорт из файла), создаются только правила из user_rules_data
+        в целевом тенанте, без переключения на исходный и без экспорта всего набора.
+        """
+        if not user_rules_data:
+            return 0, 0
+        
+        # Режим «только из файла»: создаём в целевом тенанте только правила из user_rules_data
+        if use_file_data_only:
+            return self._import_user_rules_from_file_data(
+                template_id, user_rules_data, action_mapping, global_list_mapping or {}, preserve_state
+            )
         
         print(f"\n  Используем логику 'Копирование правил в другой тенант'...")
         print(f"    Сохранение связей с действиями: Да")
@@ -647,11 +822,10 @@ class PolicyTemplateManager(BaseManager):
                         
                         print(f"      Импорт файла {filename} ({total_files})...")
                         
-                        # Используем import_single_rule_with_actions с action_mapping
-                        success = rules_manager.import_single_rule_with_actions(
+                        ret = rules_manager.import_single_rule_with_actions(
                             file_path, action_mapping, False, preserve_state, None
                         )
-                        
+                        success = (ret[0] if isinstance(ret, tuple) else ret)
                         if success:
                             success_count += 1
                             print(f"      ✅ Правило успешно импортировано")
@@ -783,15 +957,16 @@ class PolicyTemplateManager(BaseManager):
                                     dgl['value'] = mapped_dgl
                     
                     # В агрегации
-                    if 'aggregation' in create_data:
+                    if 'aggregation' in create_data and global_list_mapping:
                         aggregation = create_data['aggregation']
                         if 'global_list_id' in aggregation:
                             gl_id = aggregation['global_list_id']
-                            if str(gl_id) in global_list_mapping:
-                                aggregation['global_list_id'] = global_list_mapping[str(gl_id)]
+                            aggregation['global_list_id'] = global_list_mapping.get(str(gl_id), gl_id)
                 
-                # Если не нужно сохранять состояние, включаем правило
-                if not preserve_state:
+                # Состояние (enabled): при сохранении берём из исходных данных, иначе включаем
+                if preserve_state and 'enabled' in rule_data:
+                    create_data['enabled'] = rule_data['enabled']
+                elif not preserve_state:
                     create_data['enabled'] = True
                 
                 # Создаем правило в зависимости от типа шаблона
@@ -823,12 +998,26 @@ class PolicyTemplateManager(BaseManager):
                         response = create_response
                 
                 if response and response.status_code in [200, 201]:
+                    # После создания при необходимости явно выставляем состояние (API может игнорировать enabled при POST)
+                    if preserve_state and 'enabled' in rule_data:
+                        try:
+                            created = response.json() if hasattr(response, 'json') else {}
+                            new_rule_id = created.get('id')
+                            if new_rule_id:
+                                if template_type == 'with_user_rules':
+                                    self.update_user_rule(target_template_id, new_rule_id, {"enabled": rule_data["enabled"]})
+                                else:
+                                    self.update_policy_user_rule_in_template(
+                                        target_template_id, new_rule_id, {"enabled": rule_data["enabled"]}
+                                    )
+                                print(f"      Состояние: {'включено' if rule_data['enabled'] else 'выключено'}")
+                        except Exception as e:
+                            print(f"      ⚠️ Не удалось выставить состояние правила: {e}")
                     print(f"      ✅ Правило '{rule_name}' успешно создано")
                     imported_count += 1
                     continue
                 else:
-                    error_msg = response.text if response else "Неизвестная ошибка"
-                    print(f"      ✗ Ошибка при создании правила: {error_msg}")
+                    self._print_rule_update_error(response, create_data, "правила", error_verb="создании")
                     failed_count += 1
                     continue
             
@@ -897,26 +1086,29 @@ class PolicyTemplateManager(BaseManager):
                 update_data['variables'] = variables_copy
                 print(f"      Обновлены переменные")
             
-            # 5. Обновляем агрегацию
+            # 5. Обновляем агрегацию (только если агрегация включена)
             if 'aggregation' in rule_data and rule_data['aggregation']:
                 aggregation_copy = rule_data['aggregation'].copy()
-                
-                # Применяем маппинг глобальных списков в агрегации
-                if global_list_mapping and 'global_list_id' in aggregation_copy:
-                    gl_id = aggregation_copy['global_list_id']
-                    if str(gl_id) in global_list_mapping:
-                        aggregation_copy['global_list_id'] = global_list_mapping[str(gl_id)]
-                
-                # Для обновления агрегации нужен отдельный запрос
-                agg_response = self.update_rule_aggregation(
-                    target_template_id, target_rule_id, aggregation_copy
-                )
-                
-                if agg_response and agg_response.status_code == 200:
-                    print(f"      ✅ Настройки агрегации обновлены")
+                if aggregation_copy.get('enabled') is False:
+                    print(f"      Агрегация выключена — обновление агрегации пропущено")
                 else:
-                    error_msg = agg_response.text if agg_response else "Неизвестная ошибка"
-                    print(f"      ⚠️ Ошибка при обновлении агрегации: {error_msg}")
+                    # Применяем маппинг глобальных списков в агрегации (ключи в маппинге — строки)
+                    if global_list_mapping and 'global_list_id' in aggregation_copy:
+                        gl_id = aggregation_copy['global_list_id']
+                        mapped_id = global_list_mapping.get(str(gl_id), gl_id)
+                        aggregation_copy['global_list_id'] = mapped_id
+                        if mapped_id == gl_id and global_list_mapping:
+                            print(f"      ⚠ Глобальный список {gl_id} не найден в маппинге при обновлении агрегации")
+                    
+                    # Для обновления агрегации нужен отдельный запрос
+                    agg_response = self.update_rule_aggregation(
+                        target_template_id, target_rule_id, aggregation_copy
+                    )
+                    
+                    if agg_response and agg_response.status_code == 200:
+                        print(f"      ✅ Настройки агрегации обновлены")
+                    else:
+                        self._print_aggregation_update_error(agg_response, aggregation_copy)
             
             if not update_data:
                 print(f"      ⚠️ Нет данных для обновления, пропускаем")
@@ -939,8 +1131,7 @@ class PolicyTemplateManager(BaseManager):
                 print(f"      ✅ Изменения успешно применены")
                 imported_count += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"      ✗ Ошибка при обновлении правила: {error_msg}")
+                self._print_rule_update_error(response, update_data, "правила (пользовательское)")
                 failed_count += 1
         
         return imported_count, failed_count
@@ -1041,10 +1232,12 @@ class PolicyTemplateManager(BaseManager):
             # ШАГ 1: Копирование пользовательских правил через RulesManager
             user_imported_1, user_failed_1 = 0, 0
             if has_user_rules and user_rules_data:
-                print(f"\n  ШАГ 1: Копирование пользовательских правил (через RulesManager)...")
+                print(f"\n  ШАГ 1: Копирование пользовательских правил из файла...")
                 user_imported_1, user_failed_1 = self._import_user_rules_to_template(
                     target_template_id, user_rules_data, action_mapping, preserve_state,
-                    source_tenant_id, target_tenant_id
+                    source_tenant_id, target_tenant_id,
+                    use_file_data_only=True,
+                    global_list_mapping=global_list_mapping
                 )
             
             # ШАГ 2: Применение изменений к системным правилам
@@ -1068,16 +1261,17 @@ class PolicyTemplateManager(BaseManager):
             # Суммируем результаты
             total_imported = system_imported + user_imported_1 + user_imported_2
             total_failed = system_failed + user_failed_1 + user_failed_2
-            total_rules = len(system_rules_data) + len(user_rules_data)
+            num_system = len(system_rules_data)
+            num_user = len(user_rules_data)
+            total_rules = num_system + num_user
             
             print(f"\n✅ Импорт завершен!")
             print(f"📊 Результаты:")
-            print(f"  - Всего правил в файле: {total_rules}")
+            print(f"  - Всего записей в файле: {total_rules} (системных с изменениями: {num_system}, пользовательских: {num_user})")
             print(f"  - Успешно обработано: {total_imported}")
-            print(f"    • Изменения в системных правилах: {system_imported}")
-            print(f"    • Пользовательские правила (копирование): {user_imported_1}")
-            print(f"    • Пользовательские правила (обновление): {user_imported_2}")
-            print(f"  - Не удалось обработать: {total_failed}")
+            print(f"    • Системные правила: применено изменений {system_imported} из {num_system}")
+            print(f"    • Пользовательские правила: создано {user_imported_1}, обновлено {user_imported_2} (всего в файле: {num_user})")
+            print(f"  - Не удалось обработать: {total_failed} (системные: {system_failed}, пользовательские: {user_failed_1 + user_failed_2})")
             print(f"  - Маппинг действий: {len(action_mapping)}")
             print(f"  - Маппинг глобальных списков: {len(global_list_mapping)}")
             
@@ -1118,23 +1312,21 @@ class PolicyTemplateManager(BaseManager):
                 original_list_id = gl_list.get('id')
                 list_name = gl_list.get('name', f'Список {i}')
                 list_type = gl_list.get('type')
+                is_system = gl_list.get('is_system', True)
                 
-                # Пропускаем системные списки
-                if gl_list.get('is_system', True):
-                    print(f"    [{i}] ⚠️ Пропускаем системный список: {list_name}")
-                    continue
+                print(f"    [{i}] Обработка списка: {list_name} ({list_type})" + (" [системный]" if is_system else ""))
                 
-                print(f"    [{i}] Обработка списка: {list_name} ({list_type})")
-                
-                # Ищем существующий список в целевом тенанте
-                existing_list = lists_manager.find_list_by_name_and_type(list_name, list_type)
+                # Ищем список в целевом тенанте по имени и типу (включая системные, чтобы маппить source_id -> target_id)
+                existing_list = lists_manager.find_list_by_name_and_type_including_system(list_name, list_type)
                 
                 if existing_list:
-                    global_list_mapping[original_list_id] = existing_list.get('id')
+                    global_list_mapping[str(original_list_id)] = existing_list.get('id')
                     found_count += 1
-                    print(f"      ✓ Найден существующий список (ID: {existing_list.get('id')})")
+                    print(f"      ✓ Найден в целевом тенанте (ID: {existing_list.get('id')})")
+                elif is_system:
+                    print(f"      ⚠ Системный список не найден в целевом тенанте по имени — маппинг отсутствует")
                 else:
-                    # Создаем новый список
+                    # Создаем новый список (только для пользовательских)
                     create_data = gl_list.copy()
                     
                     # Удаляем системные поля
@@ -1146,7 +1338,7 @@ class PolicyTemplateManager(BaseManager):
                     result = lists_manager.create_list_from_data(create_data)
                     if result:
                         new_list_id = result.get('id')
-                        global_list_mapping[original_list_id] = new_list_id
+                        global_list_mapping[str(original_list_id)] = new_list_id
                         created_count += 1
                         print(f"      ✓ Создан новый список (ID: {new_list_id})")
                     else:
@@ -1167,45 +1359,58 @@ class PolicyTemplateManager(BaseManager):
 
     # ==================== КОПИРОВАНИЕ МЕЖДУ ТЕНАНТАМИ ====================
     
-    def copy_template_to_another_tenant(self, source_template_id, target_tenant_id, preserve_state=True):
-        """Копирует шаблон в другой тенант с раздельной обработкой правил"""
-        print(f"\nКопирование шаблона в другой тенант...")
-        
+    def copy_template_to_another_tenant(self, source_template_id, target_tenant_id, preserve_state=True, export_file=None):
+        """Копирует шаблон в другой тенант с раздельной обработкой правил.
+
+        Если передан export_file (путь к уже экспортированному .template.json), переключения на
+        исходный тенант не выполняется: предполагается, что экспорт сделан вызывающим кодом.
+        Выполняется только переключение на целевой тенант (если нужно) и импорт.
+        """
         original_tenant_id = self.api_client.auth_manager.tenant_id
-        
+
+        if export_file:
+            # Режим «только импорт»: вызывающий код уже экспортировал шаблон (например, пока был в исходном тенанте)
+            print(f"\nКопирование шаблона в другой тенант (импорт из готового файла)...")
+            if original_tenant_id != target_tenant_id:
+                self.api_client.auth_manager.tenant_id = target_tenant_id
+                if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                    print("❌ Не удалось переключиться на целевой тенант")
+                    return False
+            try:
+                return self.import_template(export_file, target_tenant_id, preserve_state)
+            finally:
+                try:
+                    if export_file and os.path.isfile(export_file):
+                        os.remove(export_file)
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить временный файл экспорта: {e}")
+
+        # Классический режим: экспорт в исходном тенанте, затем импорт в целевом
+        print(f"\nКопирование шаблона в другой тенант...")
         try:
-            # Переключаемся на исходный тенант
-            self.api_client.auth_manager.tenant_id = original_tenant_id
-            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
-                print("❌ Не удалось переключиться на исходный тенант")
-                return False
-            
-            # Создаем временную директорию
+            # Считаем, что текущий контекст — исходный тенант (как при вызове из меню)
             temp_dir = tempfile.mkdtemp()
-            
-            # Экспортируем шаблон с разделением на системные и пользовательские правила
             print("Экспорт шаблона с разделением правил...")
-            export_file = self.export_template(source_template_id, temp_dir, include_user_rules=True)
-            
-            if not export_file:
+            export_path = self.export_template(source_template_id, temp_dir, include_user_rules=True)
+            if not export_path:
                 print("❌ Не удалось экспортировать шаблон")
-                # Очищаем временную директорию
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return False
-            
-            # Импортируем в целевой тенант с сохранением состояния
-            result = self.import_template(export_file, target_tenant_id, preserve_state)
-            
-            # Очищаем временные файлы
+            # Переключаемся на целевой тенант и импортируем
+            self.api_client.auth_manager.tenant_id = target_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print("❌ Не удалось переключиться на целевой тенант")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return False
+            result = self.import_template(export_path, target_tenant_id, preserve_state)
             try:
-                os.remove(export_file)
+                if export_path and os.path.isfile(export_path):
+                    os.remove(export_path)
                 if os.path.exists(temp_dir) and not os.listdir(temp_dir):
                     os.rmdir(temp_dir)
             except Exception as e:
                 print(f"⚠️ Не удалось удалить временные файлы: {e}")
-            
             return result
-            
         finally:
             if original_tenant_id:
                 self.api_client.auth_manager.tenant_id = original_tenant_id
@@ -1276,93 +1481,51 @@ class PolicyTemplateManager(BaseManager):
         return True
     
     def manage_policy_templates_extended(self):
-        """Расширенное управление шаблонами политик и политиками безопасности"""
+        """Управление шаблонами и политиками безопасности — единое меню действий"""
         while True:
             print("\n=== УПРАВЛЕНИЕ ШАБЛОНАМИ И ПОЛИТИКАМИ БЕЗОПАСНОСТИ ===")
-            print("1. Работа с шаблонами политик")
-            print("2. Работа с политиками безопасности")
-            print("3. Вернуться в главное меню")
+            print("1. Показать наборы системных правил")
+            print("2. Создать шаблон политики безопасности")
+            print("3. Экспорт шаблона политики безопасности в JSON (экспериментальный)")
+            print("4. Импорт шаблона политики безопасности из JSON файла (экспериментальный)")
+            print("5. Копировать шаблон политики безопасности в другой тенант")
+            print("6. Копировать шаблон политики безопасности в выбранном тенанте")
+            print("7. Посмотреть список политик безопасности")
+            print("8. Создать шаблон политики безопасности на основе выбранной политики безопасности (Экспериментальный)")
+            print("9. Вернуться в главное меню")
             
-            choice = input("\nВыберите раздел (1-3): ")
-            
-            if choice == '1':
-                self._manage_policy_templates_section()
-            elif choice == '2':
-                self._manage_security_policies_section()
-            elif choice == '3':
-                return
-            else:
-                print("Некорректный выбор. Попробуйте снова.")
-    
-    def _manage_policy_templates_section(self):
-        """Раздел управления шаблонами политик"""
-        while True:
-            print("\n=== РАБОТА С ШАБЛОНАМИ ПОЛИТИК ===")
-            print("1. Показать список системных шаблонов (наборов правил)")
-            print("2. Создать новый шаблон политики")
-            print("3. Выгрузить шаблон политики безопасности (JSON со всеми объектами)")
-            print("4. Загрузить шаблон из JSON файла")
-            print("5. Копировать шаблон в другой тенант")
-            print("6. Копировать шаблон в этом тенанте")
-            print("7. Вернуться назад")
-            
-            choice = input("\nВыберите действие (1-7): ")
+            choice = input("\nВыберите действие (1-9): ")
             
             if choice == '1':
-                if not self._select_tenant_for_operation("ПОКАЗАТЬ СПИСОК СИСТЕМНЫХ ШАБЛОНОВ"):
+                if not self._select_tenant_for_operation("ПОКАЗАТЬ НАБОРЫ СИСТЕМНЫХ ПРАВИЛ"):
                     continue
                 self._show_vendor_templates()
-            
             elif choice == '2':
-                if not self._select_tenant_for_operation("СОЗДАТЬ НОВЫЙ ШАБЛОН"):
+                if not self._select_tenant_for_operation("СОЗДАТЬ ШАБЛОН ПОЛИТИКИ БЕЗОПАСНОСТИ"):
                     continue
                 self._create_new_template()
-            
             elif choice == '3':
-                if not self._select_tenant_for_operation("ВЫГРУЗИТЬ ШАБЛОН"):
+                if not self._select_tenant_for_operation("ЭКСПОРТ ШАБЛОНА В JSON"):
                     continue
                 self._export_template()
-            
             elif choice == '4':
                 self._import_template()
-            
             elif choice == '5':
                 self._copy_template_to_another_tenant_menu()
-            
             elif choice == '6':
-                if not self._select_tenant_for_operation("КОПИРОВАТЬ ШАБЛОН В ЭТОМ ТЕНАНТЕ"):
+                if not self._select_tenant_for_operation("КОПИРОВАТЬ ШАБЛОН В ВЫБРАННОМ ТЕНАНТЕ"):
                     continue
                 self._duplicate_template_in_tenant()
-            
             elif choice == '7':
-                return
-            
-            else:
-                print("Некорректный выбор. Попробуйте снова.")
-    
-    def _manage_security_policies_section(self):
-        """Раздел управления политиками безопасности"""
-        while True:
-            print("\n=== РАБОТА С ПОЛИТИКАМИ БЕЗОПАСНОСТИ ===")
-            print("1. Посмотреть список политик")
-            print("2. Создать шаблон политики безопасности на основе выбранной политики")
-            print("3. Вернуться назад")
-            
-            choice = input("\nВыберите действие (1-3): ")
-            
-            if choice == '1':
-                if not self._select_tenant_for_operation("ПОКАЗАТЬ СПИСОК ПОЛИТИК"):
+                if not self._select_tenant_for_operation("ПОСМОТРЕТЬ СПИСОК ПОЛИТИК БЕЗОПАСНОСТИ"):
                     continue
                 self._show_security_policies()
-            
-            elif choice == '2':
+            elif choice == '8':
                 if not self._select_tenant_for_operation("СОЗДАТЬ ШАБЛОН НА ОСНОВЕ ПОЛИТИКИ"):
                     continue
                 self._create_template_from_policy()
-            
-            elif choice == '3':
+            elif choice == '9':
                 return
-            
             else:
                 print("Некорректный выбор. Попробуйте снова.")
     

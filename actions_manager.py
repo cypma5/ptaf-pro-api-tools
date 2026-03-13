@@ -2,6 +2,18 @@
 import json
 from base_manager import BaseManager
 
+
+def _print_rule_update_error(response, rule_name):
+    """Выводит код ответа и тело при ошибке обновления правила (например 422 с причиной)."""
+    if response is not None:
+        code = getattr(response, 'status_code', None)
+        body = response.text if getattr(response, 'text', None) else "(пусто)"
+        print(f"Ошибка при обновлении правила '{rule_name}': HTTP {code}")
+        print(f"  Тело ответа: {body}")
+    else:
+        print(f"Ошибка при обновлении правила '{rule_name}': Неизвестная ошибка (нет ответа)")
+
+
 class ActionsManager(BaseManager):
     def __init__(self, api_client):
         super().__init__(api_client)
@@ -162,8 +174,7 @@ class ActionsManager(BaseManager):
                 print(f"Успешно добавлено действие в правило '{rule_name}'")
                 total_updated += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
+                _print_rule_update_error(response, rule_name)
         
         return total_updated, total_rules
     
@@ -221,8 +232,7 @@ class ActionsManager(BaseManager):
                 print(f"Успешно добавлено действие в правило '{rule_name}' ({rule_type})")
                 total_updated += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
+                _print_rule_update_error(response, rule_name)
         
         return total_updated, total_rules
     
@@ -261,8 +271,7 @@ class ActionsManager(BaseManager):
                 print(f"Успешно заменено действие в правиле '{rule_name}'")
                 total_replaced += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
+                _print_rule_update_error(response, rule_name)
         
         return total_replaced, total_rules
     
@@ -320,78 +329,126 @@ class ActionsManager(BaseManager):
                 print(f"Успешно заменено действие в правиле '{rule_name}' ({rule_type})")
                 total_replaced += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"Ошибка при обновлении правила '{rule_name}': {error_msg}")
+                _print_rule_update_error(response, rule_name)
         
         return total_replaced, total_rules
+    
+    def remove_action_from_template(self, template_id, action_id):
+        """Удаляет указанное действие из всех правил шаблона (экспериментально)."""
+        rules = self.get_template_rules(template_id)
+        if not rules:
+            print("Не найдено правил в указанном шаблоне")
+            return 0, 0
+        total_updated = 0
+        for rule in rules:
+            rule_id = rule.get('id')
+            rule_name = rule.get('name', 'Без названия')
+            rule_details = self.get_rule_details(template_id, rule_id)
+            if not rule_details:
+                continue
+            current_actions = rule_details.get('actions', [])
+            if action_id not in current_actions:
+                continue
+            new_actions = [a for a in current_actions if a != action_id]
+            response = self.update_rule_actions_only(template_id, rule_id, new_actions)
+            if self._check_response(response):
+                print(f"Удалено действие из правила '{rule_name}'")
+                total_updated += 1
+            else:
+                _print_rule_update_error(response, rule_name)
+        return total_updated, len(rules)
+    
+    def remove_action_from_policy(self, policy_id, action_id):
+        """Удаляет указанное действие из всех правил политики (экспериментально)."""
+        system_rules = self.get_policy_system_rules(policy_id)
+        user_rules = self.get_policy_user_rules(policy_id)
+        all_rules = list(system_rules or []) + list(user_rules or [])
+        if not all_rules:
+            print("Не найдено правил в указанной политике")
+            return 0, 0
+        total_updated = 0
+        for rule in all_rules:
+            rule_id = rule.get('id')
+            rule_name = rule.get('name', 'Без названия')
+            is_user_rule = rule.get('is_user_rule', False)
+            if is_user_rule:
+                rule_details = self.get_policy_user_rule_details(policy_id, rule_id)
+            else:
+                rule_details = self.get_policy_system_rule_details(policy_id, rule_id)
+            if not rule_details:
+                continue
+            current_actions = rule_details.get('actions', [])
+            if action_id not in current_actions:
+                continue
+            new_actions = [a for a in current_actions if a != action_id]
+            if is_user_rule:
+                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
+            else:
+                response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
+            if self._check_response(response):
+                rule_type = 'пользовательское' if is_user_rule else 'системное'
+                print(f"Удалено действие из правила '{rule_name}' ({rule_type})")
+                total_updated += 1
+            else:
+                _print_rule_update_error(response, rule_name)
+        return total_updated, len(all_rules)
     
     # ==================== ИНТЕРАКТИВНОЕ УПРАВЛЕНИЕ ====================
     
     def manage_actions_operations(self):
-        """Основное управление операциями с действиями"""
+        """Управление действиями в правилах — сразу выбор типа действия"""
+        ACTION_TYPES = [
+            None,
+            {'type': 'replace', 'action_key': 'log', 'name': 'Log to DB'},
+            {'type': 'replace', 'action_key': 'custom_response', 'name': 'Custom Response'},
+            {'type': 'add', 'action_key': 'send_to_syslog', 'name': 'send_to_syslog'},
+            {'type': 'replace', 'action_key': 'send_to_syslog', 'name': 'send_to_syslog'},
+            {'type': 'add_any', 'name': 'Добавить любое действие'},
+            {'type': 'replace_any', 'name': 'Замена любое на любое'},
+            {'type': 'remove_any', 'name': 'Удалить любое действие'},
+        ]
         while True:
             print("\n=== Управление действиями в правилах ===")
-            print("1. Замена или добавление действий")
-            print("2. Вернуться в главное меню")
-            
-            choice = input("\nВыберите действие (1-2): ")
-            
-            if choice == '1':
-                self._perform_actions_operation()
-            elif choice == '2':
+            print("1. Замена действия \"Записывать событие в базу данных\" (Log to DB)")
+            print("2. Замена действия \"Отправлять свой ответ\" (Custom Response)")
+            print("3. Добавить действие \"Отправить событие по протоколу Syslog\" (send_to_syslog)")
+            print("4. Заменить действие \"Отправить событие по протоколу Syslog\" (send_to_syslog)")
+            print("5. Добавить действие (Любое) ко всем правилам. (Экспериментальный)")
+            print("6. Замена действия (Любое на любое) ко всем правилам. (Экспериментальный)")
+            print("7. Удаление действия (Любое) из всех правил. (Экспериментальный)")
+            print("8. Вернуться в главное меню")
+            choice = input("\nВыберите действие (1-8): ").strip()
+            if choice == '8':
                 return
-            else:
+            if choice not in ('1', '2', '3', '4', '5', '6', '7'):
                 print("Некорректный выбор. Попробуйте снова.")
+                continue
+            action_type = ACTION_TYPES[int(choice)]
+            self._perform_actions_operation(action_type)
     
-    def _perform_actions_operation(self):
-        """Выполнение операции с действиями"""
-        # Шаг 1: Выбор типа действия
-        action_type = self._select_action_type()
-        if not action_type:
+    def _perform_actions_operation(self, action_type):
+        """Выполнение операции с действиями (тенант запрашивается после выбора типа действия)."""
+        from tenants import TenantManager
+        tenant_manager = TenantManager(self.api_client.auth_manager, self.api_client.make_request)
+        if not tenant_manager.select_tenant_interactive():
+            print("Не удалось выбрать тенант")
             return
-        
-        # Шаг 2: Выбор тенанта (уже должен быть выбран)
-        if not self.api_client.auth_manager.tenant_id:
-            print("Сначала необходимо выбрать тенант")
+        if action_type['type'] in ('add_any', 'replace_any', 'remove_any'):
+            action_data = self._select_actions_for_experimental(action_type)
+            if not action_data:
+                return
+            object_type = self._select_object_type()
+            if not object_type:
+                return
+            self._execute_experimental_operation(action_type, action_data, object_type)
             return
-        
-        # Шаг 3: Выбор конкретного действия
         action_data = self._select_specific_action(action_type)
         if not action_data:
             return
-        
-        # Шаг 4: Выбор объекта для применения (шаблон или политика)
         object_type = self._select_object_type()
         if not object_type:
             return
-        
-        # Шаг 5: Выполнение операции
         self._execute_operation(action_type, action_data, object_type)
-    
-    def _select_action_type(self):
-        """Выбор типа действия"""
-        print("\n=== Выберите тип действия ===")
-        print("1. Замена действия \"Записывать событие в базу данных\" (Log to DB)")
-        print("2. Замена действия \"Отправлять свой ответ\" (Custom Response)")
-        print("3. Добавить действие \"Отправить событие по протоколу Syslog\" (send_to_syslog)")
-        print("4. Заменить действие \"Отправить событие по протоколу Syslog\" (send_to_syslog)")
-        print("5. Отмена")
-        
-        while True:
-            choice = input("\nВаш выбор (1-5): ").strip()
-            
-            if choice == '1':
-                return {'type': 'replace', 'action_key': 'log', 'name': 'Log to DB'}
-            elif choice == '2':
-                return {'type': 'replace', 'action_key': 'custom_response', 'name': 'Custom Response'}
-            elif choice == '3':
-                return {'type': 'add', 'action_key': 'send_to_syslog', 'name': 'send_to_syslog'}
-            elif choice == '4':
-                return {'type': 'replace', 'action_key': 'send_to_syslog', 'name': 'send_to_syslog'}
-            elif choice == '5':
-                return None
-            else:
-                print("Некорректный выбор. Попробуйте снова.")
     
     def _select_specific_action(self, action_type):
         """Выбор конкретного действия"""
@@ -466,6 +523,90 @@ class ActionsManager(BaseManager):
                 return None
             else:
                 print("Некорректный выбор. Попробуйте снова.")
+    
+    def _select_actions_for_experimental(self, action_type):
+        """Выбор действий для экспериментальных операций (любое действие из списка)."""
+        actions = self.get_available_actions()
+        if not actions:
+            print("Не удалось получить список действий")
+            return None
+        kind = action_type['type']
+        if kind == 'add_any':
+            selected = self._select_action_with_prompt(actions, "Выберите действие для добавления ко всем правилам:")
+            if not selected:
+                return None
+            return {'new_action_id': selected['id'], 'new_action_name': selected.get('name')}
+        if kind == 'remove_any':
+            selected = self._select_action_with_prompt(actions, "Выберите действие для удаления из всех правил:")
+            if not selected:
+                return None
+            return {'action_id': selected['id'], 'action_name': selected.get('name')}
+        if kind == 'replace_any':
+            old_action = self._select_action_with_prompt(actions, "Выберите действие для замены (исходное):")
+            if not old_action:
+                return None
+            new_action = self._select_action_with_prompt(actions, "Выберите действие для замены (целевое):")
+            if not new_action:
+                return None
+            if old_action['id'] == new_action['id']:
+                print("Исходное и целевое действие совпадают")
+                return None
+            return {
+                'old_action_id': old_action['id'],
+                'old_action_name': old_action.get('name'),
+                'new_action_id': new_action['id'],
+                'new_action_name': new_action.get('name'),
+            }
+        return None
+    
+    def _execute_experimental_operation(self, action_type, action_data, object_type):
+        """Выполнение экспериментальных операций (любое действие)."""
+        if object_type == 'template':
+            template = self._select_template()
+            if not template:
+                return
+            template_id = template['id']
+            template_name = template.get('name', 'Без названия')
+            kind = action_type['type']
+            if kind == 'add_any':
+                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' во все правила шаблона '{template_name}'?"):
+                    return
+                total, total_rules = self.add_syslog_action_to_template(template_id, action_data['new_action_id'])
+                print(f"\nИтог: добавлено в {total} из {total_rules} правил")
+            elif kind == 'replace_any':
+                if not self._confirm_action(f"Заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' во всех правилах шаблона '{template_name}'?"):
+                    return
+                total, total_rules = self.replace_actions_in_template(
+                    template_id, action_data['old_action_id'], action_data['new_action_id'])
+                print(f"\nИтог: заменено в {total} из {total_rules} правил")
+            elif kind == 'remove_any':
+                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из всех правил шаблона '{template_name}'?"):
+                    return
+                total, total_rules = self.remove_action_from_template(template_id, action_data['action_id'])
+                print(f"\nИтог: удалено из {total} из {total_rules} правил")
+        else:
+            policy = self._select_policy()
+            if not policy:
+                return
+            policy_id = policy['id']
+            policy_name = policy.get('name', 'Без названия')
+            kind = action_type['type']
+            if kind == 'add_any':
+                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' во все правила политики '{policy_name}'?"):
+                    return
+                total, total_rules = self.add_syslog_action_to_policy(policy_id, action_data['new_action_id'])
+                print(f"\nИтог: добавлено в {total} из {total_rules} правил")
+            elif kind == 'replace_any':
+                if not self._confirm_action(f"Заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' во всех правилах политики '{policy_name}'?"):
+                    return
+                total, total_rules = self.replace_actions_in_policy(
+                    policy_id, action_data['old_action_id'], action_data['new_action_id'])
+                print(f"\nИтог: заменено в {total} из {total_rules} правил")
+            elif kind == 'remove_any':
+                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из всех правил политики '{policy_name}'?"):
+                    return
+                total, total_rules = self.remove_action_from_policy(policy_id, action_data['action_id'])
+                print(f"\nИтог: удалено из {total} из {total_rules} правил")
     
     def _execute_operation(self, action_type, action_data, object_type):
         """Выполнение выбранной операции"""
@@ -585,8 +726,13 @@ class ActionsManager(BaseManager):
             print(f"  ✓ Действие '{action_name}' создано (ID: {new_action.get('id')})")
             return new_action
         else:
-            error_msg = response.text if response else "Неизвестная ошибка"
-            print(f"  ✗ Ошибка при создании действия '{action_name}': {error_msg}")
+            if response is not None:
+                code = getattr(response, "status_code", None)
+                body = response.text if getattr(response, "text", None) else "(пусто)"
+                print(f"  ✗ Ошибка при создании действия '{action_name}': HTTP {code}")
+                print(f"    Тело ответа: {body}")
+            else:
+                print(f"  ✗ Ошибка при создании действия '{action_name}': Неизвестная ошибка (нет ответа)")
             return None
 
     def create_action_mapping(self, source_actions, target_tenant_id=None):

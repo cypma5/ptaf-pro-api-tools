@@ -38,31 +38,49 @@ class ErrorHandler:
         print("✅ Токен успешно обновлен")
         return True
     
-    def handle_common_error(self, response, operation_name=""):
-        """Обрабатывает общие ошибки HTTP"""
+    def handle_common_error(self, response, operation_name="", exception=None):
+        """Обрабатывает общие ошибки HTTP. При ошибке выводит код ответа и тело для диагностики."""
         if not response:
-            print(f"{operation_name}: Не удалось получить ответ от сервера")
+            # Единый формат вывода: Код ошибки / Ответ сервера (как при 422 и т.д.)
+            exc_response = getattr(exception, "response", None) if exception else None
+            if exc_response is not None:
+                code = exc_response.status_code
+                body = (exc_response.text or "")[:2000]
+                if len(exc_response.text or "") > 2000:
+                    body += "\n  ... (обрезано)"
+                print(f"❌ {operation_name}: Ошибка запроса (из исключения).")
+                print(f"   Код ошибки: {code}")
+                print(f"   Ответ сервера: {body}")
+                if str(exception):
+                    print(f"   Исключение: {exception}")
+                return False
+            if exception:
+                # Таймаут/сеть — ответа нет, но исключение есть
+                print(f"❌ {operation_name}: Не удалось получить ответ от сервера.")
+                code_str = "(нет ответа — таймаут или сетевая ошибка)"
+                body_str = str(exception) if str(exception) else type(exception).__name__
+                print(f"   Код ошибки: {code_str}")
+                print(f"   Ответ сервера: {body_str}")
+                req = getattr(exception, "request", None)
+                if req is not None:
+                    print(f"   URL: {getattr(req, 'url', '?')}")
+                print("   Рекомендация: проверьте сеть, увеличьте таймаут или повторите попытку позже.")
+            # Когда response=None и exception=None, ничего не выводим — вызывающий код выведет код/тело ответа (например 422)
             return False
-        
+
         if response.status_code == 401:
             return self.handle_401_error(response)
         elif response.status_code == 404:
             return self.handle_404_error(response)
         elif response.status_code >= 400:
-            print(f"{operation_name}: Ошибка {response.status_code}")
-            if response.text:
-                try:
-                    error_data = response.json()
-                    if 'message' in error_data:
-                        print(f"Сообщение: {error_data['message']}")
-                    elif 'error' in error_data:
-                        print(f"Ошибка: {error_data['error']}")
-                    else:
-                        print(f"Ответ: {response.text[:200]}")
-                except:
-                    print(f"Ответ: {response.text[:200]}")
+            body_preview = (response.text or "")[:2000]
+            if len(response.text or "") > 2000:
+                body_preview += "\n  ... (обрезано)"
+            print(f"❌ {operation_name}: Ошибка запроса.")
+            print(f"   Код ошибки: {response.status_code}")
+            print(f"   Ответ сервера: {body_preview if body_preview else '(пусто)'}")
             return False
-        
+
         return True
     
     def should_retry(self, response, max_retries=3, current_retry=0):
@@ -113,12 +131,19 @@ class ErrorHandler:
         return None
     
     def safe_api_call(self, api_method, *args, operation_name="", **kwargs):
-        """Безопасный вызов API метода с обработкой ошибок"""
-        response = api_method(*args, **kwargs)
-        
-        if not self.handle_common_error(response, operation_name):
+        """Безопасный вызов API метода с обработкой ошибок. При ошибке возвращает response (если есть), чтобы вызывающий код мог прочитать код и тело ответа."""
+        try:
+            response = api_method(*args, **kwargs)
+        except Exception as e:
+            self.handle_common_error(None, operation_name, exception=e)
             return None
-        
+
+        if response is None:
+            self.handle_common_error(response, operation_name)
+            return None
+
+        if not self.handle_common_error(response, operation_name):
+            return response  # возвращаем response, чтобы вызывающий код мог прочитать status_code и text
         return response
     
     def parse_response_items(self, response, operation_name=""):

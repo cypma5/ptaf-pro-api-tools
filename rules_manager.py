@@ -408,6 +408,8 @@ class RulesManager(BaseManager):
                             f.write(f"   Код ошибки: {fail['code']}\n")
                         if fail.get('response') is not None:
                             f.write(f"   Ответ сервера: {fail['response']}\n")
+                        if fail.get('moved_to'):
+                            f.write(f"   Файл перемещен в проблемную директорию: {fail['moved_to']}\n")
                         f.write("\n")
             
             print(f"Отчет об импорте сохранен в файл: {report_file}")
@@ -475,16 +477,17 @@ class RulesManager(BaseManager):
             error_msg = f"Ошибка при повторном импорте правила (код {response.status_code})"
             print(f"❌ {error_msg}: {rule_name}")
             
+            moved_to = None
+            if problem_dir:
+                moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "")
             self.failed_files.append({
                 'file': file_path,
                 'rule': rule_name,
                 'error': error_msg,
                 'code': response.status_code,
-                'response': response.text[:200] if response.text else ""
+                'response': response.text[:200] if response.text else "",
+                'moved_to': moved_to
             })
-            
-            if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "")
         
         return False
     
@@ -503,7 +506,7 @@ class RulesManager(BaseManager):
                 counter += 1
             
             shutil.move(file_path, new_path)
-            print(f"Файл перемещен в проблемную директорию: {new_path}")
+            print(f"❌ Файл перемещен в проблемную директорию: {new_path}")
             
             # Создаем файл с описанием ошибки
             error_file = f"{os.path.splitext(new_path)[0]}_error.txt"
@@ -519,32 +522,38 @@ class RulesManager(BaseManager):
             print(f"Не удалось переместить файл в проблемную директорию: {e}")
             return None
 
-    def import_single_rule(self, file_path, selected_action_ids=None, enable_after_import=False, 
-                           preserve_state=False, problem_dir=None):
-        """Импортирует одно правило из файла (стандартный формат)"""
+    def import_single_rule(self, file_path, selected_action_ids=None, enable_after_import=False,
+                           preserve_state=False, problem_dir=None, quiet=False):
+        """Импортирует одно правило из файла (стандартный формат). Возвращает (success, error_info); при ошибке error_info = {'error', 'code', 'response'}. Если quiet=True, не выводит «Правило:» и сообщение об успешном создании/обновлении."""
+        def _fail(error_msg, code=None, response_body=None):
+            info = {'error': error_msg, 'code': code, 'response': response_body}
+            moved_to = None
+            if problem_dir:
+                body_str = f"Код: {code}\nТело ответа:\n{response_body}" if (code is not None or response_body) else None
+                moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, body_str)
+            self.failed_files.append({
+                'file': file_path,
+                'rule': rule_name,
+                'error': error_msg,
+                'code': code,
+                'response': response_body,
+                'moved_to': moved_to
+            })
+            return (False, info)
+
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 rule_data = json.load(f)
-            
+
             rule_name = rule_data.get('name', os.path.basename(file_path))
-            print(f"Правило: {rule_name}")
-            
-            # Получаем ID шаблона политики
+            if not quiet:
+                print(f"Правило: {rule_name}")
+
             template_id = self.get_policy_template_id()
             if not template_id:
                 error_msg = "Не удалось получить ID шаблона политики"
                 print(f"❌ {error_msg}")
-                self.failed_files.append({
-                    'file': file_path,
-                    'rule': rule_name,
-                    'error': error_msg,
-                    'code': None,
-                    'response': None
-                })
-                
-                if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
-                return False
+                return _fail(error_msg, None, None)
             
             # Определяем, нужно ли сохранять исходное состояние
             should_preserve_state = preserve_state and 'enabled' in rule_data
@@ -555,28 +564,16 @@ class RulesManager(BaseManager):
                 if 'configuration' not in rule_data:
                     rule_data['configuration'] = {}
                 rule_data['configuration']['actions'] = selected_action_ids
-            
-            # Получаем список существующих правил
+
             existing_rules = self.get_existing_rules(template_id)
             if existing_rules is None:
                 error_msg = "Не удалось получить список существующих правил"
                 print(f"❌ {error_msg}")
-                self.failed_files.append({
-                    'file': file_path,
-                    'rule': rule_name,
-                    'error': error_msg,
-                    'code': None,
-                    'response': None
-                })
-                
-                if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
-                return False
-            
+                return _fail(error_msg, None, None)
+
             existing_rules_dict = {rule['name']: rule['id'] for rule in existing_rules if 'name' in rule and 'id' in rule}
-            
+
             if rule_name in existing_rules_dict:
-                # Обновление существующего правила
                 rule_id = existing_rules_dict[rule_name]
                 update_data = {
                     "configuration": {
@@ -585,15 +582,13 @@ class RulesManager(BaseManager):
                         "parameters": rule_data.get("configuration", {}).get("parameters", [])
                     }
                 }
-                
-                # Если нужно сохранить состояние, добавляем enabled
                 if should_preserve_state:
                     update_data['enabled'] = rule_enabled
                     print(f"  Состояние: {'включено' if rule_enabled else 'выключено'} (сохранено)")
                 elif enable_after_import:
                     update_data['enabled'] = True
                     print(f"  Состояние: включено (новое)")
-                
+
                 response = self.update_rule(template_id, rule_id, update_data)
                 if response is None:
                     error_msg = "Не удалось выполнить запрос на обновление (нет ответа от сервера)"
@@ -612,34 +607,24 @@ class RulesManager(BaseManager):
                     
                 # Проверяем на ошибку 404
                 if response.status_code == 404:
-                    # Обрабатываем ошибку 404
-                    return self._handle_404_error(
-                        template_id, file_path, rule_name, rule_data, 
+                    self._handle_404_error(
+                        template_id, file_path, rule_name, rule_data,
                         selected_action_ids, enable_after_import, problem_dir
                     )
-                
+                    return (False, {'error': 'Ошибка 404', 'code': 404, 'response': (response.text or "")[:2000]})
+
                 if response.status_code == 200:
                     status_text = "включено" if rule_enabled else "выключено"
-                    if should_preserve_state:
-                        print(f"✅ Правило '{rule_name}' успешно обновлено ({status_text})")
-                    else:
-                        print(f"✅ Правило '{rule_name}' успешно обновлено")
+                    if not quiet:
+                        if should_preserve_state:
+                            print(f"✅ Правило '{rule_name}' успешно обновлено ({status_text})")
+                        else:
+                            print(f"✅ Правило '{rule_name}' успешно обновлено")
                     self.success_files.append(file_path)
-                    return True
-                else:
-                    # Используем ErrorHandler для обработки других ошибок
-                    if not self.api_client.error_handler.handle_common_error(response, f"Обновление правила '{rule_name}'"):
-                        self.failed_files.append({
-                            'file': file_path,
-                            'rule': rule_name,
-                            'error': f"Ошибка {response.status_code}",
-                            'code': response.status_code,
-                            'response': response.text[:200] if response.text else ""
-                        })
-                        
-                        if problem_dir:
-                            self._move_to_problem_directory(file_path, problem_dir, f"Ошибка {response.status_code}", response.text[:200] if response.text else "")
-                    return False
+                    return (True, None)
+                body = (response.text or "")[:2000]
+                self.api_client.error_handler.handle_common_error(response, f"Обновление правила '{rule_name}'")
+                return _fail(f"Ошибка обновления правила: код {response.status_code}", response.status_code, body)
             else:
                 # Создание нового правила
                 # Если нужно сохранить состояние, добавляем enabled
@@ -650,79 +635,52 @@ class RulesManager(BaseManager):
                 
                 response = self.create_rule(template_id, rule_data)
                 if response is None:
-                    error_msg = "Не удалось выполнить запрос на создание (нет ответа от сервера)"
+                    error_msg = "Не удалось выполнить запрос на создание (нет ответа от сервера). Код и тело ответа недоступны (возможны таймаут или сетевая ошибка)."
                     print(f"❌ {error_msg}")
-                    self.failed_files.append({
-                        'file': file_path,
-                        'rule': rule_name,
-                        'error': error_msg,
-                        'code': None,
-                        'response': None
-                    })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
-                    return False
-                
-                # Проверяем на ошибку 404
-                if response.status_code == 404:
-                    # Обрабатываем ошибку 404
-                    return self._handle_404_error(
-                        template_id, file_path, rule_name, rule_data,
-                        selected_action_ids, enable_after_import, problem_dir
-                    )
-                    
+                    return _fail(error_msg, None, None)
+
+                if response.status_code != 201:
+                    code = response.status_code
+                    body = (response.text or "")[:2000]
+                    error_msg = f"Ошибка создания правила: код ответа {code}"
+                    return _fail(error_msg, code, body)
+
                 if response.status_code == 201:
                     status_text = "включено" if rule_enabled else "выключено"
-                    if should_preserve_state:
-                        print(f"✅ Правило '{rule_name}' успешно создано ({status_text})")
-                    else:
-                        print(f"✅ Правило '{rule_name}' успешно создано")
+                    if not quiet:
+                        if should_preserve_state:
+                            print(f"✅ Правило '{rule_name}' успешно создано ({status_text})")
+                        else:
+                            print(f"✅ Правило '{rule_name}' успешно создано")
                     self.success_files.append(file_path)
-                    return True
-                else:
-                    # Используем ErrorHandler для обработки других ошибок
-                    if not self.api_client.error_handler.handle_common_error(response, f"Создание правила '{rule_name}'"):
-                        self.failed_files.append({
-                            'file': file_path,
-                            'rule': rule_name,
-                            'error': f"Ошибка {response.status_code}",
-                            'code': response.status_code,
-                            'response': response.text[:200] if response.text else ""
-                        })
-                        
-                        if problem_dir:
-                            self._move_to_problem_directory(file_path, problem_dir, f"Ошибка {response.status_code}", response.text[:200] if response.text else "")
-                    return False
-        
+                    return (True, None)
+
         except json.JSONDecodeError as e:
             error_msg = f"Ошибка чтения JSON: {str(e)}"
             print(f"❌ Ошибка при чтении файла {file_path}: {error_msg}")
+            moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
             self.failed_files.append({
                 'file': file_path,
                 'rule': os.path.basename(file_path),
                 'error': error_msg,
                 'code': None,
-                'response': None
+                'response': None,
+                'moved_to': moved_to
             })
-            
-            if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
-            return False
+            return (False, {'error': error_msg, 'code': None, 'response': None})
         except Exception as e:
             error_msg = f"Неожиданная ошибка: {str(e)}"
             print(f"❌ Неожиданная ошибка при обработке файла {file_path}: {error_msg}")
+            moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
             self.failed_files.append({
                 'file': file_path,
                 'rule': os.path.basename(file_path),
                 'error': error_msg,
                 'code': None,
-                'response': None
+                'response': None,
+                'moved_to': moved_to
             })
-            
-            if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
-            return False
+            return (False, {'error': error_msg, 'code': None, 'response': None})
 
     def import_single_rule_with_actions(self, file_path, action_mapping=None, enable_after_import=False, 
                                         preserve_state=False, problem_dir=None):
@@ -734,7 +692,8 @@ class RulesManager(BaseManager):
             # Проверяем формат файла
             if 'rule_data' not in import_data or 'actions_info' not in import_data:
                 print(f"Файл {os.path.basename(file_path)} имеет неверный формат для импорта с действиями")
-                return self.import_single_rule(file_path, None, enable_after_import, preserve_state, problem_dir)
+                ret = self.import_single_rule(file_path, None, enable_after_import, preserve_state, problem_dir)
+                return (ret[0], ret[1]) if isinstance(ret, tuple) else (ret, None)
             
             rule_data = import_data['rule_data']
             actions_info = import_data['actions_info']
@@ -756,16 +715,15 @@ class RulesManager(BaseManager):
             if not template_id:
                 error_msg = "Не удалось получить ID шаблона политики"
                 print(f"❌ {error_msg}")
+                moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
                 self.failed_files.append({
                     'file': file_path,
                     'rule': rule_name,
                     'error': error_msg,
                     'code': None,
-                    'response': None
+                    'response': None,
+                    'moved_to': moved_to
                 })
-                
-                if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                 return False
             
             # Восстанавливаем связи с действиями
@@ -825,16 +783,15 @@ class RulesManager(BaseManager):
             if existing_rules is None:
                 error_msg = "Не удалось получить список существующих правил"
                 print(f"❌ {error_msg}")
+                moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
                 self.failed_files.append({
                     'file': file_path,
                     'rule': rule_name,
                     'error': error_msg,
                     'code': None,
-                    'response': None
+                    'response': None,
+                    'moved_to': moved_to
                 })
-                
-                if problem_dir:
-                    self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                 return False
             
             existing_rules_dict = {rule['name']: rule['id'] for rule in existing_rules if 'name' in rule and 'id' in rule}
@@ -862,16 +819,15 @@ class RulesManager(BaseManager):
                 if response is None:
                     error_msg = "Не удалось выполнить запрос на обновление (нет ответа от сервера)"
                     print(f"❌ {error_msg}")
+                    moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
                     self.failed_files.append({
                         'file': file_path,
                         'rule': rule_name,
                         'error': error_msg,
                         'code': None,
-                        'response': None
+                        'response': None,
+                        'moved_to': moved_to
                     })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
                     
                 if response.status_code == 200:
@@ -886,16 +842,15 @@ class RulesManager(BaseManager):
                 else:
                     error_msg = f"Ошибка {response.status_code}"
                     print(f"❌ {error_msg} при обновлении правила '{rule_name}'")
+                    moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "") if problem_dir else None
                     self.failed_files.append({
                         'file': file_path,
                         'rule': rule_name,
                         'error': error_msg,
                         'code': response.status_code,
-                        'response': response.text[:200] if response.text else ""
+                        'response': response.text[:200] if response.text else "",
+                        'moved_to': moved_to
                     })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "")
                     return False
             else:
                 # Создание нового правила
@@ -909,16 +864,15 @@ class RulesManager(BaseManager):
                 if response is None:
                     error_msg = "Не удалось выполнить запрос на создание (нет ответа от сервера)"
                     print(f"❌ {error_msg}")
+                    moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
                     self.failed_files.append({
                         'file': file_path,
                         'rule': rule_name,
                         'error': error_msg,
                         'code': None,
-                        'response': None
+                        'response': None,
+                        'moved_to': moved_to
                     })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
                     return False
                     
                 if response.status_code == 201:
@@ -933,45 +887,42 @@ class RulesManager(BaseManager):
                 else:
                     error_msg = f"Ошибка {response.status_code}"
                     print(f"❌ {error_msg} при создании правила '{rule_name}'")
+                    moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "") if problem_dir else None
                     self.failed_files.append({
                         'file': file_path,
                         'rule': rule_name,
                         'error': error_msg,
                         'code': response.status_code,
-                        'response': response.text[:200] if response.text else ""
+                        'response': response.text[:200] if response.text else "",
+                        'moved_to': moved_to
                     })
-                    
-                    if problem_dir:
-                        self._move_to_problem_directory(file_path, problem_dir, error_msg, response.text[:200] if response.text else "")
                     return False
         
         except json.JSONDecodeError as e:
             error_msg = f"Ошибка чтения JSON: {str(e)}"
             print(f"❌ Ошибка при чтении файла {file_path}: {error_msg}")
+            moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
             self.failed_files.append({
                 'file': file_path,
                 'rule': os.path.basename(file_path),
                 'error': error_msg,
                 'code': None,
-                'response': None
+                'response': None,
+                'moved_to': moved_to
             })
-            
-            if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
         except Exception as e:
             error_msg = f"Неожиданная ошибка: {str(e)}"
             print(f"❌ Неожиданная ошибка при обработке файла {file_path}: {error_msg}")
+            moved_to = self._move_to_problem_directory(file_path, problem_dir, error_msg, None) if problem_dir else None
             self.failed_files.append({
                 'file': file_path,
                 'rule': os.path.basename(file_path),
                 'error': error_msg,
                 'code': None,
-                'response': None
+                'response': None,
+                'moved_to': moved_to
             })
-            
-            if problem_dir:
-                self._move_to_problem_directory(file_path, problem_dir, error_msg, None)
             return False
 
 
@@ -1097,21 +1048,20 @@ class RulesManager(BaseManager):
                     file_path = os.path.abspath(os.path.join(directory_path, filename))
                     
                     if include_actions:
-                        # Импорт с восстановлением действий
-                        if self.import_single_rule_with_actions(file_path, enable_after_import, 
-                                                               preserve_state, problem_dir):
+                        r = self.import_single_rule_with_actions(file_path, enable_after_import,
+                                                                 preserve_state, problem_dir)
+                        if (r[0] if isinstance(r, tuple) else r):
                             success_count += 1
                     else:
-                        # Стандартный импорт
-                        if self.import_single_rule(file_path, selected_action_ids, enable_after_import,
-                                                  preserve_state, problem_dir):
+                        r = self.import_single_rule(file_path, selected_action_ids, enable_after_import,
+                                                    preserve_state, problem_dir)
+                        if (r[0] if isinstance(r, tuple) else r):
                             success_count += 1
-                
-                # Восстанавливаем исходный тенант
+
                 if original_tenant_id:
                     self.api_client.auth_manager.tenant_id = original_tenant_id
                     self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
-                
+
                 # Выводим итоговую статистику
                 fail_count = len(self.failed_files)
                 total_count = len(json_files)
@@ -1147,16 +1097,16 @@ class RulesManager(BaseManager):
                         file_path = os.path.abspath(os.path.join(directory_path, filename))
                         
                         if include_actions:
-                            # Импорт с восстановлением действий
-                            if self.import_single_rule_with_actions(file_path, enable_after_import,
-                                                                   preserve_state, problem_dir):
+                            r = self.import_single_rule_with_actions(file_path, enable_after_import,
+                                                                     preserve_state, problem_dir)
+                            if (r[0] if isinstance(r, tuple) else r):
                                 success_count += 1
                         else:
-                            # Стандартный импорт
-                            if self.import_single_rule(file_path, selected_action_ids, enable_after_import,
-                                                      preserve_state, problem_dir):
+                            r = self.import_single_rule(file_path, selected_action_ids, enable_after_import,
+                                                        preserve_state, problem_dir)
+                            if (r[0] if isinstance(r, tuple) else r):
                                 success_count += 1
-                    
+
                     # Восстанавливаем исходный тенант
                     if original_tenant_id:
                         self.api_client.auth_manager.tenant_id = original_tenant_id
@@ -1197,15 +1147,17 @@ class RulesManager(BaseManager):
             print("\nНет проблемных файлов!")
             return
         
-        print("\nСписок проблемных файлов:")
+        print("\nСписок проблемных файлов (❌ — неуспешный импорт):")
         for i, fail in enumerate(self.failed_files, 1):
-            print(f"{i}. {fail['file']}")
+            print(f"❌ {i}. {fail['file']}")
             print(f"   Правило: {fail['rule']}")
             print(f"   Причина: {fail['error']}")
             if fail.get('code') is not None:
                 print(f"   Код ошибки: {fail['code']}")
             if fail.get('response') is not None:
                 print(f"   Ответ сервера: {fail['response']}")
+            if fail.get('moved_to'):
+                print(f"   Файл перемещен в проблемную директорию: {fail['moved_to']}")
             print()
 
     def manage_rules(self):
@@ -1415,14 +1367,14 @@ class RulesManager(BaseManager):
                     print(f"\nИмпорт файла {filename} ({total_files})...")
                     
                     if include_actions:
-                        success = self.import_single_rule_with_actions(
+                        ret = self.import_single_rule_with_actions(
                             file_path, action_mapping, False, preserve_state, None
                         )
                     else:
-                        success = self.import_single_rule(
+                        ret = self.import_single_rule(
                             file_path, None, False, preserve_state, None
                         )
-                    
+                    success = (ret[0] if isinstance(ret, tuple) else ret)
                     if success:
                         success_count += 1
             

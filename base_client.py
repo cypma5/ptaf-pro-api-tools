@@ -1,5 +1,6 @@
 # base_client.py
 import json
+import time
 import requests
 from urllib.parse import urljoin
 import urllib3
@@ -45,6 +46,9 @@ class BaseAPIClient:
         for attempt in range(max_retries + 1):
             try:
                 self._debug_request(method, url, **kwargs)
+                # Таймаут по умолчанию, если не передан (создание тенанта может занимать много времени)
+                if 'timeout' not in kwargs:
+                    kwargs['timeout'] = 120
                 response = requests.request(
                     method,
                     url,
@@ -58,13 +62,21 @@ class BaseAPIClient:
                 if response.status_code == 401 and attempt < max_retries:
                     print("Получена 401 ошибка, пытаемся обновить токен...")
                     if self.auth_manager.get_jwt_tokens(self.make_request):
+                        # Если уже выбран конкретный тенант, дополнительно получаем tenant-level токен
+                        if self.auth_manager.tenant_id:
+                            print(f"DEBUG: обновляем токен для тенанта {self.auth_manager.tenant_id}")
+                            if not self.auth_manager.update_jwt_with_tenant(self.make_request):
+                                print("Не удалось обновить JWT токены для выбранного тенанта")
+                                return response
+                            else:
+                                print(f"DEBUG: 401 обработана, активный tenant_id={self.auth_manager.tenant_id}")
                         auth_headers = self.auth_manager.get_auth_headers()
                         headers = {**self.headers, **auth_headers}
                         continue
                     else:
                         print("Не удалось обновить JWT токены")
-                        return None
-                
+                        # Возвращаем response, чтобы вызывающий код мог вывести код и тело ответа
+                        return response
                 return response
 
             except requests.exceptions.RequestException as e:
@@ -72,6 +84,6 @@ class BaseAPIClient:
                 if attempt < max_retries:
                     time.sleep(1)
                 else:
-                    return None
-        
+                    # Пробрасываем, чтобы вызывающий код мог вывести детали (например, таймаут/сеть)
+                    raise
         return None

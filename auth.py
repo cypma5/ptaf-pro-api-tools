@@ -33,6 +33,8 @@ class AuthManager:
         
         # Используем requests напрямую, чтобы избежать рекурсии
         try:
+            # При ошибках важно понимать, что именно отправлялось
+            # (METHOD, URL, Request Body), поэтому URL и payload логируем ниже.
             response = requests.post(
                 url, 
                 json=payload, 
@@ -52,9 +54,45 @@ class AuthManager:
                 return True
             else:
                 print(f"Ошибка при получении токенов. Код: {response.status_code}, Ответ: {response.text}")
+                print(f"REQUEST: POST {url}")
+                try:
+                    import json as _json
+                    print(f"Request body: {_json.dumps(payload, ensure_ascii=False)}")
+                except Exception:
+                    print(f"Request body (raw): {payload}")
                 return False
         except Exception as e:
             print(f"Исключение при получении токенов: {e}")
+            return False
+
+    def get_account_level_token(self, make_request_func):
+        """Получает токен на уровне учётной записи (без привязки к тенанту). Нужен для операций вроде создания тенанта."""
+        if not self.refresh_token:
+            return False
+        url = urljoin(self.base_url, f"{self.api_path}/auth/access_tokens")
+        payload = {
+            "refresh_token": self.refresh_token,
+            "tenant_id": None,
+            "fingerprint": self.fingerprint
+        }
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                verify=self.ssl_verify,
+                headers={
+                    "User-Agent": "PTAF-API-Client/1.0",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                }
+            )
+            if response.status_code == 201:
+                tokens = response.json()
+                self.access_token = tokens.get("access_token")
+                self.refresh_token = tokens.get("refresh_token")
+                return True
+            return False
+        except Exception:
             return False
 
     def update_jwt_with_tenant(self, make_request_func):
@@ -73,8 +111,8 @@ class AuthManager:
         # Используем requests напрямую, чтобы избежать рекурсии
         try:
             response = requests.post(
-                url, 
-                json=payload, 
+                url,
+                json=payload,
                 verify=self.ssl_verify,
                 headers={
                     "User-Agent": "PTAF-API-Client/1.0",
@@ -91,6 +129,12 @@ class AuthManager:
                 return True
             else:
                 print(f"Ошибка при обновлении токенов. Код: {response.status_code}, Ответ: {response.text}")
+                print(f"REQUEST: POST {url}")
+                try:
+                    import json as _json
+                    print(f"Request body: {_json.dumps(payload, ensure_ascii=False)}")
+                except Exception:
+                    print(f"Request body (raw): {payload}")
                 return False
         except Exception as e:
             print(f"Исключение при обновлении токенов: {e}")

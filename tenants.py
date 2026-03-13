@@ -47,12 +47,11 @@ class TenantManager:
             name = tenant.get("name", "Без названия")
             tenant_id = tenant.get("id", "Без ID")
             is_default = tenant.get("is_default", False)
-            description = tenant.get("description", "Без описания")
-            
+            description = tenant.get("description")
             default_marker = " (по умолчанию)" if is_default else ""
-            print(f"{i}. {name}{default_marker}")
-            print(f"   ID: {tenant_id}")
-            print(f"   Описание: {description}\n")
+            print(f"{i}. {name}{default_marker} ({tenant_id})")
+            if description:
+                print(f"   {description}")
         
         while True:
             try:
@@ -310,12 +309,11 @@ class TenantManager:
                         name = tenant.get("name", "Без названия")
                         tenant_id = tenant.get("id", "Без ID")
                         is_default = tenant.get("is_default", False)
-                        description = tenant.get("description", "Без описания")
-                        
+                        description = tenant.get("description")
                         default_marker = " (по умолчанию)" if is_default else ""
-                        print(f"{i}. {name}{default_marker}")
-                        print(f"   ID: {tenant_id}")
-                        print(f"   Описание: {description}")
+                        print(f"{i}. {name}{default_marker} ({tenant_id})")
+                        if description:
+                            print(f"   {description}")
                 else:
                     print("Не удалось получить список тенантов")
             elif choice == '3':
