@@ -253,12 +253,12 @@ class TrafficSettingsManager(BaseManager):
         
         while True:
             print("\nУправление настройками traffic_settings:")
-            print("1. NGINX: Настройки загрузки файлов")
-            print("2. Envoy Proxy: Sticky Session")
-            print("3. Envoy Core: Настройки TLS")
-            print("4. NGINX: Настройки access.log")
-            print("5. NGINX: Настройки error.log")
-            print("6. Система: Лимиты приложений")
+            print("1. ptaf-nginx (client_max_body_size): Лимит на размер запроса")
+            print("2. envoy-proxy: Sticky Session")
+            print("3. ptaf-envoy: Настройки TLS")
+            print("4. ptaf-nginx: Настройки access.log")
+            print("5. ptaf-nginx: Настройки error.log")
+            print("6. Система: Лимиты приложений (Не более 30)")
             print("7. Система: Debug режим")
             print("8. Просмотр текущих настроек")
             print("9. Вернуться в главное меню")

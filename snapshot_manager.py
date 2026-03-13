@@ -280,16 +280,15 @@ class SnapshotManager(BaseManager):
         return self.get_all_tenants_snapshots()
     
     def manage_tenant_transfer(self):
-        """Управление переносом объектов между тенантами"""
+        """Управление копированием объектов между тенантами"""
         while True:
-            print("\nПеренос объектов между тенантами:")
-            print("1. Перенос защищаемых серверов в другой тенант")
-            print("2. Перенос ролей в другой тенант")
-            print("3. Перенос пользовательских действий в другой тенант")
-            print("4. Вернуться в главное меню")
-            
-            choice = input("\nВыберите действие (1-4): ")
-            
+            print("\nКопирование объектов между тенантами:")
+            print("1. Копирование защищаемых серверов в другой тенант")
+            print("2. Копирование ролей в другой тенант")
+            print("3. Копирование пользовательских действий в другой тенант")
+            print("4. Копирование веб приложения в другой тенант (Экспериментальное)")
+            print("5. Вернуться в главное меню")
+            choice = input("\nВыберите действие (1-5): ")
             if choice == '1':
                 self.copy_backends_to_another_tenant()
             elif choice == '2':
@@ -299,9 +298,16 @@ class SnapshotManager(BaseManager):
             elif choice == '3':
                 self.copy_custom_actions_to_another_tenant()
             elif choice == '4':
+                self._copy_web_app_to_another_tenant()
+            elif choice == '5':
                 return
             else:
                 print("Некорректный выбор. Попробуйте снова.")
+    
+    def _copy_web_app_to_another_tenant(self):
+        """Копирование веб приложения (политики + шаблон + действия + списки) в другой тенант. Экспериментально."""
+        from web_app_copy import run_copy_web_app_flow
+        run_copy_web_app_flow(self.api_client, self)
     
     def copy_backends_to_another_tenant(self):
         """Копирует бекенды из одного тенанта в другой"""

@@ -16,6 +16,10 @@ from roles_manager import RolesManager
 from backends_manager import BackendsManager
 from backup_manager import BackupManager
 from global_lists_manager import GlobalListsManager
+from version_utils import (
+    get_release_from_versions_response,
+    version_gte,
+)
 
 class PTAFClient:
     def __init__(self, config_file="ptaf_api_client_config.json", debug=False):
@@ -47,6 +51,12 @@ class PTAFClient:
         self.tenant_manager = TenantManager(self.auth_manager, self.base_client.make_request)
 
     def load_config(self, config_file):
+        # Если путь относительный — ищем конфиг рядом со скриптом (чтобы работало при запуске из любой директории)
+        if not os.path.isabs(config_file):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            path_next_to_script = os.path.join(script_dir, config_file)
+            if os.path.isfile(path_next_to_script):
+                config_file = path_next_to_script
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -119,6 +129,24 @@ class PTAFClient:
         """Управление глобальных списков"""
         return self.global_lists_manager.manage_global_lists()
 
+    def fetch_ptaf_release(self):
+        """Загружает версию PTAF с сервера (GET about/versions) и сохраняет релиз в self.ptaf_release (например 4.3.0)."""
+        if hasattr(self, "_ptaf_release_cached"):
+            return self.ptaf_release
+        self.ptaf_release = None
+        try:
+            response = self.api_client.get_versions()
+            if response and response.status_code == 200:
+                data = response.json()
+                payload = data.get("data") if isinstance(data, dict) else None
+                self.ptaf_release = get_release_from_versions_response(payload)
+                if self.ptaf_release:
+                    print(f"Версия PTAF: {self.ptaf_release}")
+        except Exception:
+            pass
+        self._ptaf_release_cached = True
+        return self.ptaf_release
+
     def manage_rules(self):
         """Управление правилами"""
         return self.rules_manager.manage_rules()
@@ -167,7 +195,7 @@ def main():
     parser.add_argument(
         "--transfer",
         action="store_true",
-        help="Перенос объектов между тенантами"
+        help="Копирование объектов между тенантами"
     )
     parser.add_argument(
         "--dangerous",
@@ -209,73 +237,88 @@ def main():
             print("Не удалось получить JWT токены")
             return
 
+        # Загружаем версию PTAF для отображения пунктов меню по релизу
+        client.fetch_ptaf_release()
+
+        # Пункты меню: label, min_version (релиз, с которого доступен пункт), need_tenant
+        MENU_ITEMS = [
+            {"label": "Работа с правилами", "min_version": None, "need_tenant": False, "key": "rules"},
+            {"label": "Управление шаблонами и политиками безопасности", "min_version": None, "need_tenant": False, "key": "policy_templates"},
+            {"label": "Управление настройками traffic_settings", "min_version": None, "need_tenant": True, "key": "traffic_settings"},
+            {"label": "Управление действиями в правилах", "min_version": None, "need_tenant": False, "key": "actions"},
+            {"label": "Получение конфигураций тенантов", "min_version": None, "need_tenant": False, "key": "snapshots"},
+            {"label": "Восстановление конфигураций тенантов", "min_version": None, "need_tenant": True, "key": "restore"},
+            {"label": "Копирование объектов между тенантами", "min_version": None, "need_tenant": False, "key": "transfer"},
+            {"label": "Работа с тенантами", "min_version": None, "need_tenant": False, "key": "tenants"},
+            {"label": "Управление глобальных списков", "min_version": "4.2.2", "need_tenant": False, "key": "global_lists"},
+            {"label": "Выход", "min_version": None, "need_tenant": False, "key": "exit"},
+        ]
+
+        def run_menu_action(client, item):
+            if item["key"] == "exit":
+                return "exit"
+            if item["need_tenant"] and not client.select_tenant():
+                print("Не удалось выбрать тенант")
+                return None
+            handlers = {
+                "rules": client.manage_rules,
+                "policy_templates": client.manage_policy_templates_extended,
+                "traffic_settings": client.manage_traffic_settings,
+                "actions": client.manage_actions_operations,
+                "snapshots": client.manage_snapshots,
+                "restore": client.manage_restore,
+                "transfer": client.manage_tenant_transfer,
+                "tenants": client.manage_tenants,
+                "global_lists": client.manage_global_lists,
+            }
+            fn = handlers.get(item["key"])
+            if fn:
+                fn()
+            return None
+
         # Если нет аргументов - запускаем интерактивный режим
         if not any([args.source, args.export, args.delete_all, args.policy_template,
-                    args.traffic_settings, args.actions, args.snapshot, args.restore, 
+                    args.traffic_settings, args.actions, args.snapshot, args.restore,
                     args.transfer, args.dangerous, args.tenants, args.global_lists, args.rules]):
             while True:
+                visible = [it for it in MENU_ITEMS if version_gte(client.ptaf_release, it.get("min_version") or "0.0.0")]
                 print("\nГлавное меню:")
-                print("1. Работа с правилами")
-                print("2. Управление шаблонами и политиками безопасности")
-                print("3. Управление настройками traffic_settings")
-                print("4. Управление действиями в правилах")
-                print("5. Получение конфигураций тенантов")
-                print("6. Восстановление конфигураций тенантов")
-                print("7. Перенос объектов между тенантами")
-                print("8. Работа с тенантами")
-                print("9. Управление глобальных списков")
-                print("10. Выход")
-                
-                choice = input("\nВыберите действие (1-10): ")
-                
-                if choice == '1':
-                    client.manage_rules()
-                
-                elif choice == '2':
-                    client.manage_policy_templates_extended()
-                
-                elif choice == '3':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    client.manage_traffic_settings()
-                
-                elif choice == '4':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    client.manage_actions_operations()
-                
-                elif choice == '5':
-                    client.manage_snapshots()
-                
-                elif choice == '6':
-                    if not client.select_tenant():
-                        print("Не удалось выбрать тенант")
-                        continue
-                    client.manage_restore()
-                
-                elif choice == '7':
-                    client.manage_tenant_transfer()
-                
-                elif choice == '8':
-                    client.manage_tenants()
-                
-                elif choice == '9':
-                    client.manage_global_lists()
-                
-                elif choice == '10':
-                    return
-                
-                else:
+                for i, it in enumerate(visible, 1):
+                    print(f"{i}. {it['label']}")
+                choice = input(f"\nВыберите действие (1-{len(visible)}): ")
+                try:
+                    idx = int(choice)
+                    if 1 <= idx <= len(visible):
+                        result = run_menu_action(client, visible[idx - 1])
+                        if result == "exit":
+                            return
+                    else:
+                        print("Некорректный выбор. Попробуйте снова.")
+                except ValueError:
                     print("Некорректный выбор. Попробуйте снова.")
-        
-        # Обработка аргументов командной строки
         else:
+            # Минимальные версии для пунктов CLI (если None — проверка не выполняется)
+            CLI_MIN_VERSIONS = {
+                "global_lists": "4.2.2",
+            }
+
+            def check_cli_version(feature_key):
+                min_ver = CLI_MIN_VERSIONS.get(feature_key)
+                if not min_ver:
+                    return True
+                if not version_gte(client.ptaf_release, min_ver):
+                    current = client.ptaf_release or "не определена"
+                    print(f"Функция недоступна: требуется PTAF {min_ver} или выше. Текущая версия: {current}.")
+                    return False
+                return True
+
+            # Обработка аргументов командной строки
             if args.rules:
                 client.manage_rules()
             
             elif args.global_lists:
+                if not check_cli_version("global_lists"):
+                    return
                 client.manage_global_lists()
             
             elif args.policy_template:
@@ -342,9 +385,6 @@ def main():
                 client.manage_traffic_settings()
             
             elif args.actions:
-                if not client.select_tenant():
-                    print("Не удалось выбрать тенант")
-                    return
                 client.manage_actions_operations()
             
             elif args.snapshot:
@@ -364,9 +404,6 @@ def main():
             
             elif args.tenants:
                 client.manage_tenants()
-            
-            elif args.global_lists:
-                client.manage_global_lists()
 
     except Exception as e:
         print(f"Критическая ошибка: {e}")

@@ -14,6 +14,14 @@ class APIClient:
         url = urljoin(self.auth_manager.base_url, f"{self.auth_manager.api_path}/{endpoint}")
         return self.make_request(method, url, **kwargs)
     
+    # ==================== ВЕРСИИ ====================
+    def get_versions(self):
+        """Получить версии PTAF (infra, ptaf_rule_set, ptaf_deploy). Нужен для проверки доступности функционала по релизу."""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", "about/versions",
+            operation_name="Получение версий PTAF"
+        )
+    
     # ==================== ТЕНАНТЫ ====================
     def get_tenants(self):
         """Получить список тенантов"""
@@ -23,9 +31,10 @@ class APIClient:
         )
     
     def create_tenant(self, tenant_data):
-        """Создать тенант"""
+        """Создать тенант (таймаут 120 с — создание может занимать время)."""
         return self.error_handler.safe_api_call(
             self._make_api_call, "POST", "auth/tenants", json=tenant_data,
+            timeout=120,
             operation_name="Создание тенанта"
         )
     
@@ -215,7 +224,29 @@ class APIClient:
             self._make_api_call, "PATCH", f"config/policies/{policy_id}/user_rules/{rule_id}", json=update_data,
             operation_name=f"Обновление пользовательского правила {rule_id}"
         )
-    
+
+    # ==================== ВЕБ-ПРИЛОЖЕНИЯ ====================
+    def get_applications(self):
+        """Получить список веб приложений"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", "config/applications",
+            operation_name="Получение веб приложений"
+        )
+
+    def create_application(self, application_data):
+        """Создать веб приложение (привязанную к шаблону политику)"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "POST", "config/applications", json=application_data,
+            operation_name="Создание веб приложения"
+        )
+
+    def update_application(self, application_id, application_data):
+        """Обновить веб приложение (PATCH config/applications/{id})"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH", f"config/applications/{application_id}", json=application_data,
+            operation_name="Обновление веб приложения"
+        )
+
     # ==================== БЕКЕНДЫ ====================
     def get_backends(self):
         """Получить бекенды"""
@@ -262,15 +293,17 @@ class APIClient:
         )
     
     # ==================== СНАПШОТЫ ====================
+    # GET  /api/ptaf/v4/config/snapshot — получение снапшота конфигурации тенанта
+    # POST /api/ptaf/v4/config/snapshot — восстановление из снапшота
     def get_snapshot(self):
-        """Получить снапшот"""
+        """Получить снапшот конфигурации (GET .../api/ptaf/v4/config/snapshot)."""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", "config/snapshot",
             operation_name="Получение снапшота"
         )
     
     def restore_snapshot(self, snapshot_data):
-        """Восстановить снапшот"""
+        """Восстановить конфигурацию из снапшота (POST .../api/ptaf/v4/config/snapshot)."""
         return self.error_handler.safe_api_call(
             self._make_api_call, "POST", "config/snapshot", json=snapshot_data,
             operation_name="Восстановление снапшота"
