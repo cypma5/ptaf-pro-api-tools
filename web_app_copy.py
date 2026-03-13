@@ -220,30 +220,38 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
         api_client.auth_manager.tenant_id = original_tenant_id
         return
 
-    # 2.1 Опция: данные и переназначения из снапшота (GET /api/ptaf/v4/config/snapshot)
-    snapshot_data: Optional[Dict[str, Any]] = None
-    app_from_snapshot: Optional[Dict[str, Any]] = None  # name, hosts, locations, protection_mode, template_name, system_rule_overrides, user_rules
-    use_snapshot = input("\nВзять приложение и переназначения из снапшота? (y/n): ").strip().lower() == "y"
-    if use_snapshot:
-        from snapshot_parser import (
-            get_applications_from_snapshot,
-            get_app_and_overrides_from_snapshot,
-        )
-        print("Получение снапшота конфигурации (GET config/snapshot)...")
-        snapshot_data = snapshot_manager.get_tenant_snapshot(source_tenant_id)
-        if snapshot_data:
-            snapshot_apps = get_applications_from_snapshot(snapshot_data)
-            chosen = _select_application_from_snapshot(snapshot_apps)
-            if chosen:
-                app_from_snapshot = get_app_and_overrides_from_snapshot(snapshot_data, chosen["name"])
-                if app_from_snapshot:
-                    print(
-                        f"Из снапшота: приложение '{app_from_snapshot['name']}', шаблон '{app_from_snapshot.get('template_name')}', "
-                        f"оверрайдов системных правил: {len(app_from_snapshot.get('system_rule_overrides') or {})}, "
-                        f"пользовательских правил: {len(app_from_snapshot.get('user_rules') or [])}."
-                    )
-        else:
-            print("Не удалось получить снапшот конфигурации, продолжаем выбор приложения из API.")
+    # 2.1 Данные приложения и переназначения всегда из снапшота (GET /api/ptaf/v4/config/snapshot)
+    from snapshot_parser import (
+        get_applications_from_snapshot,
+        get_app_and_overrides_from_snapshot,
+    )
+    print("Получение снапшота конфигурации (GET config/snapshot)...")
+    snapshot_data = snapshot_manager.get_tenant_snapshot(source_tenant_id)
+    if not snapshot_data:
+        print("Не удалось получить снапшот конфигурации. Копирование отменено.")
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+        return
+    snapshot_apps = get_applications_from_snapshot(snapshot_data)
+    chosen = _select_application_from_snapshot(snapshot_apps)
+    if not chosen:
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+        return
+    app_from_snapshot = get_app_and_overrides_from_snapshot(snapshot_data, chosen["name"])
+    if not app_from_snapshot:
+        print("Не удалось извлечь данные приложения из снапшота. Копирование отменено.")
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+        return
+    print(
+        f"Из снапшота: приложение '{app_from_snapshot['name']}', шаблон '{app_from_snapshot.get('template_name')}', "
+        f"оверрайдов системных правил: {len(app_from_snapshot.get('system_rule_overrides') or {})}, "
+        f"пользовательских правил: {len(app_from_snapshot.get('user_rules') or [])}."
+    )
 
     source_app = None
     source_policy_id = None
@@ -252,92 +260,36 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
     source_rule_details_by_name: Dict[str, List[Dict[str, Any]]] = {}
     source_user_rule_details_by_name: Dict[str, List[Dict[str, Any]]] = {}
 
-    if app_from_snapshot:
-        app_name = app_from_snapshot.get("name", "Без названия")
-        protection_mode = app_from_snapshot.get("protection_mode", "ACTIVE_PREVENTION")
-        hosts = app_from_snapshot.get("hosts", []) or []
-        locations = app_from_snapshot.get("locations", []) or ["/"]
-        source_template_name = app_from_snapshot.get("template_name")
-        overrides = app_from_snapshot.get("system_rule_overrides") or {}
-        for rule_name, override in overrides.items():
-            source_rule_details_by_name.setdefault(rule_name, []).append(dict(override))
-        for ur in app_from_snapshot.get("user_rules") or []:
-            name = ur.get("name")
-            if name:
-                source_user_rule_details_by_name.setdefault(name, []).append(dict(ur))
-        if not source_template_name:
-            print("В снапшоте не найден шаблон политики для приложения — нужен выбор из API.")
-            app_from_snapshot = None
-        else:
-            templates_resp = api_client.get_user_templates()
-            templates = api_client._parse_response_items(templates_resp) or []
-            for t in templates:
-                if t.get("name") == source_template_name:
-                    source_template_id = t.get("id")
-                    break
-            if not source_template_id:
-                print(f"Шаблон '{source_template_name}' не найден в исходном тенанте по API.")
-                app_from_snapshot = None
-
-    if not app_from_snapshot:
-        # 3. Классический путь: список приложений из API
-        response = api_client.get_applications()
-        applications = api_client._parse_response_items(response) or []
-        source_app = _select_application(applications)
-        if not source_app:
-            api_client.auth_manager.tenant_id = original_tenant_id
-            if original_tenant_id:
-                api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
-            return
-
-        app_name = source_app.get("name", "Без названия")
-        source_policy_id = source_app.get("policy_id")
-        source_template_id = source_app.get("policy_template_id")
-        protection_mode = source_app.get("protection_mode", "ACTIVE_PREVENTION")
-        hosts = source_app.get("hosts", []) or []
-        locations = source_app.get("locations", []) or []
-
-        if not source_policy_id or not source_template_id:
-            print("У выбранного приложения нет policy_id или policy_template_id — копирование невозможно.")
-            api_client.auth_manager.tenant_id = original_tenant_id
-            if original_tenant_id:
-                api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
-            return
-
-        source_template_resp = api_client.get_template_details(source_template_id)
-        if not source_template_resp or source_template_resp.status_code != 200:
-            _print_http_error(source_template_resp, f"Не удалось получить детали шаблона политики {source_template_id}")
-            api_client.auth_manager.tenant_id = original_tenant_id
-            if original_tenant_id:
-                api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
-            return
-        source_template_details = source_template_resp.json()
-        source_template_name = source_template_details.get("name", "Без названия")
-
-        # 4. Системные правила политики из API (для переноса по именам)
-        source_system_rules_resp = api_client.get_policy_system_rules(source_policy_id)
-        source_system_rules = api_client._parse_response_items(source_system_rules_resp) or []
-        for rule in source_system_rules:
-            rule_id = rule.get("id")
-            rule_name = rule.get("name", "Без названия")
-            details_resp = api_client.get_policy_system_rule_details(source_policy_id, rule_id)
-            if not details_resp or details_resp.status_code != 200:
-                _print_http_error(details_resp, f"Не удалось получить детали правила '{rule_name}'")
-                continue
-            details = details_resp.json()
-            source_rule_details_by_name.setdefault(rule_name, []).append(details)
-        # 4.1 Пользовательские правила политики из API (для переноса по именам)
-        source_user_rules_resp = api_client.get_policy_user_rules(source_policy_id)
-        source_user_rules = api_client._parse_response_items(source_user_rules_resp) or []
-        for rule in source_user_rules:
-            rule_id = rule.get("id")
-            rule_name = rule.get("name", "Без названия")
-            details_resp = api_client.get_policy_user_rule_details(source_policy_id, rule_id)
-            if not details_resp or details_resp.status_code != 200:
-                _print_http_error(details_resp, f"Не удалось получить детали пользовательского правила '{rule_name}'")
-                continue
-            details = details_resp.json()
-            source_user_rule_details_by_name.setdefault(rule_name, []).append(details)
+    app_name = app_from_snapshot.get("name", "Без названия")
+    protection_mode = app_from_snapshot.get("protection_mode", "ACTIVE_PREVENTION")
+    hosts = app_from_snapshot.get("hosts", []) or []
+    locations = app_from_snapshot.get("locations", []) or ["/"]
+    source_template_name = app_from_snapshot.get("template_name")
+    overrides = app_from_snapshot.get("system_rule_overrides") or {}
+    for rule_name, override in overrides.items():
+        source_rule_details_by_name.setdefault(rule_name, []).append(dict(override))
+    for ur in app_from_snapshot.get("user_rules") or []:
+        name = ur.get("name")
+        if name:
+            source_user_rule_details_by_name.setdefault(name, []).append(dict(ur))
+    if not source_template_name:
+        print("В снапшоте не найден шаблон политики для приложения. Копирование отменено.")
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+        return
+    templates_resp = api_client.get_user_templates()
+    templates = api_client._parse_response_items(templates_resp) or []
+    for t in templates:
+        if t.get("name") == source_template_name:
+            source_template_id = t.get("id")
+            break
+    if not source_template_id:
+        print(f"Шаблон '{source_template_name}' не найден в исходном тенанте по API. Копирование отменено.")
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+        return
 
     print(f"\nВыбрано веб приложение '{app_name}' в тенанте '{source_tenant_name}'.")
 

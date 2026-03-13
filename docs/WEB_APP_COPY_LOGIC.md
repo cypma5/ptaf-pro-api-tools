@@ -24,25 +24,13 @@
 - Вызывается `update_jwt_with_tenant()` для получения tenant-level JWT.
 - При ошибке — сообщение и выход, контекст восстанавливается.
 
-### 2.1. Опция: данные из снапшота
+### 2.1. Данные приложения и переназначения из снапшота (всегда)
 
-- Вопрос: **«Взять приложение и переназначения из снапшота? (y/n)»**.
-- При **y**:
-  - Вызов **GET /api/ptaf/v4/config/snapshot** для исходного тенанта (`get_tenant_snapshot(source_tenant_id)`).
-  - Парсинг снапшота (`snapshot_parser`): список приложений, для выбранного — имя, hosts, locations, protection_mode, имя шаблона, `system_rule_overrides`, `user_rules`.
-  - Пользователь выбирает приложение из списка приложений снапшота.
-  - Заполняются: `app_name`, `hosts`, `locations`, `protection_mode`, `source_template_name`, `source_rule_details_by_name` (только оверрайды системных правил), `source_user_rule_details_by_name` (из `user_rules` снапшота).
-  - В целевом тенанте по имени шаблона ищется шаблон (GET user templates), находится `source_template_id`. Если не найден — выход с сообщением.
-- При **n** или при неудаче снапшота — используется классический путь (шаг 3).
-
-### 3. Классический путь: приложение и политика из API
-
-- **GET config/applications** в исходном тенанте.
-- Выбор приложения по номеру.
-- Из выбранного приложения: `app_name`, `source_policy_id`, `source_template_id`, `protection_mode`, `hosts`, `locations`.
-- **GET** деталей шаблона по `source_template_id` → `source_template_name`.
-- Для системных правил: **GET** системных правил политики `source_policy_id`, для каждого правила **GET** деталей → заполняется `source_rule_details_by_name` (enabled, actions и т.д.).
-- Для пользовательских правил: **GET** пользовательских правил политики `source_policy_id`, для каждого **GET** деталей → заполняется `source_user_rule_details_by_name`.
+- Вызов **GET /api/ptaf/v4/config/snapshot** для исходного тенанта (`get_tenant_snapshot(source_tenant_id)`). При ошибке — выход.
+- Парсинг снапшота (`snapshot_parser`): список приложений, для выбранного — имя, hosts, locations, protection_mode, имя шаблона, `system_rule_overrides`, `user_rules`.
+- Пользователь выбирает приложение из списка приложений снапшота. При отмене — выход.
+- Заполняются: `app_name`, `hosts`, `locations`, `protection_mode`, `source_template_name`, `source_rule_details_by_name` (только оверрайды системных правил), `source_user_rule_details_by_name` (из `user_rules` снапшота).
+- По имени шаблона в исходном тенанте ищется шаблон (GET user templates) → `source_template_id`. Если не найден — выход с сообщением.
 
 ### 4. Экспорт шаблона (на случай, если в целевом тенанте его нет)
 

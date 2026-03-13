@@ -117,6 +117,29 @@ class PolicyTemplateManager(BaseManager):
         """Обновляет настройки агрегации"""
         return self.api_client.update_template_rule_aggregation(template_id, rule_id, aggregation_data)
 
+    def _print_rule_update_error(self, response, update_data, context="правила", error_verb="обновлении"):
+        """Выводит подробную информацию об ошибке обновления/создания правила: запрос, код, тело ответа."""
+        print(f"      ✗ Ошибка при {error_verb} {context}:")
+        if response is not None:
+            code = getattr(response, "status_code", None)
+            body = getattr(response, "text", None) or "(пусто)"
+            req = getattr(response, "request", None)
+            method = req.method if req else "PATCH"
+            url = req.url if req else ""
+            print(f"        REQUEST: {method} {url}")
+            try:
+                print(f"        Request body: {json.dumps(update_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {update_data}")
+            print(f"        Код ответа: {code}")
+            print(f"        Тело ответа: {body}")
+        else:
+            print(f"        Неизвестная ошибка (нет ответа от сервера)")
+            try:
+                print(f"        Request body: {json.dumps(update_data, ensure_ascii=False)}")
+            except Exception:
+                print(f"        Request body: {update_data}")
+
     def _print_aggregation_update_error(self, agg_response, aggregation_data):
         """Выводит подробную информацию об ошибке обновления агрегации: запрос, код, тело ответа."""
         print(f"      ⚠️ Ошибка при обновлении агрегации:")
@@ -618,28 +641,32 @@ class PolicyTemplateManager(BaseManager):
             if response and response.status_code == 200:
                 print(f"      ✅ Изменения успешно применены")
                 
-                # 5. Обновляем настройки агрегации если есть
+                # 5. Обновляем настройки агрегации если есть и агрегация включена
                 if 'aggregation' in rule_data and rule_data['aggregation']:
                     aggregation_data = rule_data['aggregation'].copy()
-                    
-                    # Применяем маппинг глобальных списков в агрегации
-                    if global_list_mapping and 'global_list_id' in aggregation_data:
-                        gl_id = aggregation_data['global_list_id']
-                        if str(gl_id) in global_list_mapping:
-                            aggregation_data['global_list_id'] = global_list_mapping[str(gl_id)]
-                            print(f"      Обновлен глобальный список в агрегации")
-                    
-                    agg_response = self.update_rule_aggregation(template_id, target_rule_id, aggregation_data)
-                    
-                    if agg_response and agg_response.status_code == 200:
-                        print(f"      ✅ Настройки агрегации обновлены")
+                    if aggregation_data.get('enabled') is False:
+                        print(f"      Агрегация выключена — обновление агрегации пропущено")
                     else:
-                        self._print_aggregation_update_error(agg_response, aggregation_data)
+                        # Применяем маппинг глобальных списков в агрегации (ключи в маппинге — строки)
+                        if global_list_mapping and 'global_list_id' in aggregation_data:
+                            gl_id = aggregation_data['global_list_id']
+                            mapped_id = global_list_mapping.get(str(gl_id), gl_id)
+                            aggregation_data['global_list_id'] = mapped_id
+                            if mapped_id != gl_id:
+                                print(f"      Обновлен глобальный список в агрегации: {gl_id} -> {mapped_id}")
+                            elif global_list_mapping:
+                                print(f"      ⚠ Глобальный список {gl_id} не найден в маппинге, отправка как есть (возможна ошибка reference_not_exist)")
+                        
+                        agg_response = self.update_rule_aggregation(template_id, target_rule_id, aggregation_data)
+                        
+                        if agg_response and agg_response.status_code == 200:
+                            print(f"      ✅ Настройки агрегации обновлены")
+                        else:
+                            self._print_aggregation_update_error(agg_response, aggregation_data)
                 
                 imported_count += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"      ✗ Ошибка при обновлении правила: {error_msg}")
+                self._print_rule_update_error(response, update_data, "правила (системное)")
                 failed_count += 1
         
         return imported_count, failed_count
@@ -930,12 +957,11 @@ class PolicyTemplateManager(BaseManager):
                                     dgl['value'] = mapped_dgl
                     
                     # В агрегации
-                    if 'aggregation' in create_data:
+                    if 'aggregation' in create_data and global_list_mapping:
                         aggregation = create_data['aggregation']
                         if 'global_list_id' in aggregation:
                             gl_id = aggregation['global_list_id']
-                            if str(gl_id) in global_list_mapping:
-                                aggregation['global_list_id'] = global_list_mapping[str(gl_id)]
+                            aggregation['global_list_id'] = global_list_mapping.get(str(gl_id), gl_id)
                 
                 # Состояние (enabled): при сохранении берём из исходных данных, иначе включаем
                 if preserve_state and 'enabled' in rule_data:
@@ -991,8 +1017,7 @@ class PolicyTemplateManager(BaseManager):
                     imported_count += 1
                     continue
                 else:
-                    error_msg = response.text if response else "Неизвестная ошибка"
-                    print(f"      ❌ Ошибка при создании правила: {error_msg}")
+                    self._print_rule_update_error(response, create_data, "правила", error_verb="создании")
                     failed_count += 1
                     continue
             
@@ -1061,25 +1086,29 @@ class PolicyTemplateManager(BaseManager):
                 update_data['variables'] = variables_copy
                 print(f"      Обновлены переменные")
             
-            # 5. Обновляем агрегацию
+            # 5. Обновляем агрегацию (только если агрегация включена)
             if 'aggregation' in rule_data and rule_data['aggregation']:
                 aggregation_copy = rule_data['aggregation'].copy()
-                
-                # Применяем маппинг глобальных списков в агрегации
-                if global_list_mapping and 'global_list_id' in aggregation_copy:
-                    gl_id = aggregation_copy['global_list_id']
-                    if str(gl_id) in global_list_mapping:
-                        aggregation_copy['global_list_id'] = global_list_mapping[str(gl_id)]
-                
-                # Для обновления агрегации нужен отдельный запрос
-                agg_response = self.update_rule_aggregation(
-                    target_template_id, target_rule_id, aggregation_copy
-                )
-                
-                if agg_response and agg_response.status_code == 200:
-                    print(f"      ✅ Настройки агрегации обновлены")
+                if aggregation_copy.get('enabled') is False:
+                    print(f"      Агрегация выключена — обновление агрегации пропущено")
                 else:
-                    self._print_aggregation_update_error(agg_response, aggregation_copy)
+                    # Применяем маппинг глобальных списков в агрегации (ключи в маппинге — строки)
+                    if global_list_mapping and 'global_list_id' in aggregation_copy:
+                        gl_id = aggregation_copy['global_list_id']
+                        mapped_id = global_list_mapping.get(str(gl_id), gl_id)
+                        aggregation_copy['global_list_id'] = mapped_id
+                        if mapped_id == gl_id and global_list_mapping:
+                            print(f"      ⚠ Глобальный список {gl_id} не найден в маппинге при обновлении агрегации")
+                    
+                    # Для обновления агрегации нужен отдельный запрос
+                    agg_response = self.update_rule_aggregation(
+                        target_template_id, target_rule_id, aggregation_copy
+                    )
+                    
+                    if agg_response and agg_response.status_code == 200:
+                        print(f"      ✅ Настройки агрегации обновлены")
+                    else:
+                        self._print_aggregation_update_error(agg_response, aggregation_copy)
             
             if not update_data:
                 print(f"      ⚠️ Нет данных для обновления, пропускаем")
@@ -1102,8 +1131,7 @@ class PolicyTemplateManager(BaseManager):
                 print(f"      ✅ Изменения успешно применены")
                 imported_count += 1
             else:
-                error_msg = response.text if response else "Неизвестная ошибка"
-                print(f"      ✗ Ошибка при обновлении правила: {error_msg}")
+                self._print_rule_update_error(response, update_data, "правила (пользовательское)")
                 failed_count += 1
         
         return imported_count, failed_count
@@ -1284,23 +1312,21 @@ class PolicyTemplateManager(BaseManager):
                 original_list_id = gl_list.get('id')
                 list_name = gl_list.get('name', f'Список {i}')
                 list_type = gl_list.get('type')
+                is_system = gl_list.get('is_system', True)
                 
-                # Пропускаем системные списки
-                if gl_list.get('is_system', True):
-                    print(f"    [{i}] ⚠️ Пропускаем системный список: {list_name}")
-                    continue
+                print(f"    [{i}] Обработка списка: {list_name} ({list_type})" + (" [системный]" if is_system else ""))
                 
-                print(f"    [{i}] Обработка списка: {list_name} ({list_type})")
-                
-                # Ищем существующий список в целевом тенанте
-                existing_list = lists_manager.find_list_by_name_and_type(list_name, list_type)
+                # Ищем список в целевом тенанте по имени и типу (включая системные, чтобы маппить source_id -> target_id)
+                existing_list = lists_manager.find_list_by_name_and_type_including_system(list_name, list_type)
                 
                 if existing_list:
-                    global_list_mapping[original_list_id] = existing_list.get('id')
+                    global_list_mapping[str(original_list_id)] = existing_list.get('id')
                     found_count += 1
-                    print(f"      ✓ Найден существующий список (ID: {existing_list.get('id')})")
+                    print(f"      ✓ Найден в целевом тенанте (ID: {existing_list.get('id')})")
+                elif is_system:
+                    print(f"      ⚠ Системный список не найден в целевом тенанте по имени — маппинг отсутствует")
                 else:
-                    # Создаем новый список
+                    # Создаем новый список (только для пользовательских)
                     create_data = gl_list.copy()
                     
                     # Удаляем системные поля
@@ -1312,7 +1338,7 @@ class PolicyTemplateManager(BaseManager):
                     result = lists_manager.create_list_from_data(create_data)
                     if result:
                         new_list_id = result.get('id')
-                        global_list_mapping[original_list_id] = new_list_id
+                        global_list_mapping[str(original_list_id)] = new_list_id
                         created_count += 1
                         print(f"      ✓ Создан новый список (ID: {new_list_id})")
                     else:

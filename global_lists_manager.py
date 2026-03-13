@@ -67,7 +67,7 @@ class GlobalListsManager:
         return detailed_lists
     
     def find_list_by_name_and_type(self, name, list_type):
-        """Ищет список по имени и типу"""
+        """Ищет список по имени и типу (только пользовательские, не системные)."""
         all_lists = self.get_global_lists()
         if not all_lists:
             return None
@@ -78,6 +78,16 @@ class GlobalListsManager:
                 not lst.get('is_system', True)):
                 return lst
         
+        return None
+
+    def find_list_by_name_and_type_including_system(self, name, list_type):
+        """Ищет список по имени и типу, включая системные (для маппинга между тенантами)."""
+        all_lists = self.get_global_lists()
+        if not all_lists:
+            return None
+        for lst in all_lists:
+            if lst.get('name') == name and lst.get('type') == list_type:
+                return lst
         return None
     
     def check_list_exists(self, list_data):
