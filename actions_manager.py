@@ -423,12 +423,17 @@ class ActionsManager(BaseManager):
     # ==================== ОПЕРАЦИИ С ДЕЙСТВИЯМИ ====================
     
     def add_syslog_action_to_template(self, template_id, syslog_action_id):
-        """Добавляет действие send_to_syslog в правила шаблона"""
+        """Добавляет действие send_to_syslog в правила шаблона с event.class = attack"""
         rules = self.get_template_rules(template_id)
         if not rules:
             print("Не найдено правил в указанном шаблоне")
             return 0, 0
-        
+
+        rules = self._filter_rules_for_replace(rules)
+        if not rules:
+            print(self._replace_filter_empty_message())
+            return 0, 0
+
         total_updated = 0
         total_rules = len(rules)
         
@@ -462,7 +467,7 @@ class ActionsManager(BaseManager):
         return total_updated, total_rules
     
     def add_syslog_action_to_policy(self, policy_id, syslog_action_id):
-        """Добавляет действие send_to_syslog в правила политики"""
+        """Добавляет действие send_to_syslog в правила политики с event.class = attack"""
         # Получаем все правила политики (системные и пользовательские)
         system_rules = self.get_policy_system_rules(policy_id)
         user_rules = self.get_policy_user_rules(policy_id)
@@ -476,7 +481,12 @@ class ActionsManager(BaseManager):
         if not all_rules:
             print("Не найдено правил в указанной политике")
             return 0, 0
-        
+
+        all_rules = self._filter_rules_for_replace(all_rules)
+        if not all_rules:
+            print(self._replace_filter_empty_message())
+            return 0, 0
+
         policy_template_id = self._get_policy_template_id(policy_id)
         template_rules_cache = {}
         total_updated = 0
@@ -635,11 +645,17 @@ class ActionsManager(BaseManager):
         return total_replaced, total_rules
     
     def remove_action_from_template(self, template_id, action_id):
-        """Удаляет указанное действие из всех правил шаблона (экспериментально)."""
+        """Удаляет указанное действие из правил шаблона с event.class = attack (экспериментально)."""
         rules = self.get_template_rules(template_id)
         if not rules:
             print("Не найдено правил в указанном шаблоне")
             return 0, 0
+
+        rules = self._filter_rules_for_replace(rules)
+        if not rules:
+            print(self._replace_filter_empty_message())
+            return 0, 0
+
         total_updated = 0
         for rule in rules:
             rule_id = rule.get('id')
@@ -660,13 +676,19 @@ class ActionsManager(BaseManager):
         return total_updated, len(rules)
     
     def remove_action_from_policy(self, policy_id, action_id):
-        """Удаляет указанное действие из всех правил политики (экспериментально)."""
+        """Удаляет указанное действие из правил политики с event.class = attack (экспериментально)."""
         system_rules = self.get_policy_system_rules(policy_id)
         user_rules = self.get_policy_user_rules(policy_id)
         all_rules = list(system_rules or []) + list(user_rules or [])
         if not all_rules:
             print("Не найдено правил в указанной политике")
             return 0, 0
+
+        all_rules = self._filter_rules_for_replace(all_rules)
+        if not all_rules:
+            print(self._replace_filter_empty_message())
+            return 0, 0
+
         policy_template_id = self._get_policy_template_id(policy_id)
         template_rules_cache = {}
         total_updated = 0
@@ -925,12 +947,12 @@ class ActionsManager(BaseManager):
             template_id = template['id']
             template_name = template.get('name', 'Без названия')
             if kind == 'add_any':
-                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' во все правила шаблона '{template_name}'?"):
+                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' в правила с классом 'attack' шаблона '{template_name}'?"):
                     return
                 total, total_rules = self.add_syslog_action_to_template(template_id, action_data['new_action_id'])
                 print(f"\nИтог: добавлено в {total} из {total_rules} правил")
             elif kind == 'remove_any':
-                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из всех правил шаблона '{template_name}'?"):
+                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из правил с классом 'attack' шаблона '{template_name}'?"):
                     return
                 total, total_rules = self.remove_action_from_template(template_id, action_data['action_id'])
                 print(f"\nИтог: удалено из {total} из {total_rules} правил")
@@ -941,12 +963,12 @@ class ActionsManager(BaseManager):
             policy_id = policy['id']
             policy_name = policy.get('name', 'Без названия')
             if kind == 'add_any':
-                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' во все правила политики '{policy_name}'?"):
+                if not self._confirm_action(f"Добавить действие '{action_data['new_action_name']}' в правила с классом 'attack' политики '{policy_name}'?"):
                     return
                 total, total_rules = self.add_syslog_action_to_policy(policy_id, action_data['new_action_id'])
                 print(f"\nИтог: добавлено в {total} из {total_rules} правил")
             elif kind == 'remove_any':
-                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из всех правил политики '{policy_name}'?"):
+                if not self._confirm_action(f"Удалить действие '{action_data['action_name']}' из правил с классом 'attack' политики '{policy_name}'?"):
                     return
                 total, total_rules = self.remove_action_from_policy(policy_id, action_data['action_id'])
                 print(f"\nИтог: удалено из {total} из {total_rules} правил")
@@ -964,7 +986,10 @@ class ActionsManager(BaseManager):
             
             # Подтверждение
             if action_type['type'] == 'add':
-                confirm_msg = f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' во все правила шаблона '{template_name}'?"
+                confirm_msg = (
+                    f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' "
+                    f"в правила с классом 'attack' шаблона '{template_name}'?"
+                )
             else:
                 confirm_msg = (
                     f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' "
@@ -999,7 +1024,10 @@ class ActionsManager(BaseManager):
             
             # Подтверждение
             if action_type['type'] == 'add':
-                confirm_msg = f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' во все правила политики '{policy_name}'?"
+                confirm_msg = (
+                    f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' "
+                    f"в правила с классом 'attack' политики '{policy_name}'?"
+                )
             else:
                 confirm_msg = (
                     f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' "
