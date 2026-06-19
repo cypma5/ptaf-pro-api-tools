@@ -41,14 +41,34 @@
 
 ## Установка
 
-Клонируйте репозиторий и при необходимости создайте виртуальное окружение:
+Требования: Python 3.8+ и `pip`.
+
+1. Клонируйте репозиторий:
 
 ```bash
 git clone <repository-url>
 cd ptaf-pro-api-tools
-# опционально: python3 -m venv venv && source venv/bin/activate  # Linux/macOS
-pip install -r requirements.txt   # если есть зависимости
 ```
+
+2. Рекомендуется создать виртуальное окружение:
+
+```bash
+# Linux / macOS
+python3 -m venv venv
+source venv/bin/activate
+
+# Windows (PowerShell)
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+3. Установите зависимости из `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
+Сейчас в зависимостях указан пакет `requests` (HTTP-запросы к API PTAF).
 
 ---
 

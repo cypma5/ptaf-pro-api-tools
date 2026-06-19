@@ -2,6 +2,7 @@
 import os
 import json
 import datetime
+from access_log_formats import load_access_log_formats
 from base_manager import BaseManager
 
 class TrafficSettingsManager(BaseManager):
@@ -146,25 +147,24 @@ class TrafficSettingsManager(BaseManager):
         new_settings['core_nginx_access_log'] = access_log_enabled
         
         if access_log_enabled:
-            # Формат access log
+            formats = load_access_log_formats()
             print("\nДоступные форматы access log:")
-            print("1. Combined (стандартный)")
-            print("2. Extended (с X-Forwarded-For)")
-            print("3. Minimal (основные поля)")
-            print("4. Пользовательский формат")
-            
-            choice = input("Выберите формат [1-4]: ")
-            
-            if choice == '1':
-                new_settings['core_nginx_access_log_format'] = '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"'
-            elif choice == '2':
-                new_settings['core_nginx_access_log_format'] = '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for"'
-            elif choice == '3':
-                new_settings['core_nginx_access_log_format'] = '$remote_addr [$time_local] "$request" $status $body_bytes_sent'
-            elif choice == '4':
-                custom_format = input("Введите свой формат: ")
-                if custom_format:
-                    new_settings['core_nginx_access_log_format'] = custom_format
+            for index, log_format in enumerate(formats, 1):
+                print(f"{index}. {log_format['name']}")
+
+            choice = input(f"Выберите формат [1-{len(formats)}]: ")
+
+            try:
+                selected = formats[int(choice) - 1]
+            except (ValueError, IndexError):
+                print("Некорректный выбор, формат не изменён")
+            else:
+                if selected.get("custom"):
+                    custom_format = input("Введите свой формат: ")
+                    if custom_format:
+                        new_settings["core_nginx_access_log_format"] = custom_format
+                else:
+                    new_settings["core_nginx_access_log_format"] = selected["format"]
         
         if self.update_traffic_settings(new_settings):
             print("Настройки логирования обновлены")

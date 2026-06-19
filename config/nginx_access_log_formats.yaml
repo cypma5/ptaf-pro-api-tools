@@ -1,0 +1,19 @@
+# Форматы NGINX access.log для меню traffic_settings.
+# Чтобы добавить новый формат — добавьте элемент в список formats с полями name и format.
+# Для ручного ввода формата используйте custom: true (поле format не нужно).
+
+formats:
+  - name: Combined (стандартный)
+    format: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"'
+
+  - name: Extended (с X-Forwarded-For)
+    format: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for"'
+
+  - name: Minimal (основные поля)
+    format: '$remote_addr [$time_local] "$request" $status $body_bytes_sent'
+
+  - name: for vector + OpenSearch
+    format: '"\"hostname\": \"$hostname\",\"timestamp\": \"$time_iso8601\",\"server_name\": \"$server_name\",\"client_ip\": \"$remote_addr\",\"real_client_ip\": \"$realip_remote_addr\",\"client_port\": \"$remote_port\",\"connection\": \"$connection\",\"connection_requests\": \"$connection_requests\",\"request_id\": \"$request_id\",\"scheme\": \"$scheme\",\"ssl_cipher\": \"$ssl_cipher\",\"ssl_protocol\": \"$ssl_protocol\",\"client_proto\": \"$server_protocol\",\"request_length\": \"$request_length\",\"request_content_length\": \"$http_content_length\",\"request_method\": \"$request_method\",\"request_uri\": \"$request_uri\",\"request_time\": \"$request_time\",\"request_completion\": \"$request_completion\",\"response_code\": \"$status\",\"upstream_status\": \"$upstream_status\",\"response_bytes_sent\": \"$bytes_sent\",\"response_body_bytes_sent\": \"$body_bytes_sent\",\"upstream_connect_time\": \"$upstream_connect_time\",\"upstream_header_time\": \"$upstream_header_time\",\"upstream_response_time\": \"$upstream_response_time\",\"upstream_response_length\": \"$upstream_response_length\",\"upstream_addr\": \"$upstream_addr\",\"http_request_host\": \"$http_host\",\"http_referer\": \"$http_referer\",\"http_x_forwarded_for\": \"$http_x_forwarded_for\",\"http_user_agent\": \"$http_user_agent\"'
+
+  - name: Пользовательский формат
+    custom: true

@@ -127,17 +127,31 @@ class APIClient:
         )
     
     def get_template_rules(self, template_id):
-        """Получить правила шаблона"""
+        """Получить правила пользовательского шаблона"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/rules",
             operation_name=f"Получение правил шаблона {template_id}"
         )
+
+    def get_vendor_template_rules(self, template_id):
+        """Получить правила системного (vendor) шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/vendor/{template_id}/rules",
+            operation_name=f"Получение правил vendor-шаблона {template_id}"
+        )
     
     def get_template_rule_details(self, template_id, rule_id):
-        """Получить детали правила шаблона"""
+        """Получить детали правила пользовательского шаблона"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/rules/{rule_id}",
             operation_name=f"Получение деталей правила {rule_id}"
+        )
+
+    def get_vendor_template_rule_details(self, template_id, rule_id):
+        """Получить детали правила системного (vendor) шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/vendor/{template_id}/rules/{rule_id}",
+            operation_name=f"Получение деталей vendor-правила {rule_id}"
         )
     
     def update_template_rule(self, template_id, rule_id, update_data):
