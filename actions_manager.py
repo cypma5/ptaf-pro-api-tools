@@ -15,6 +15,8 @@ def _print_rule_update_error(response, rule_name):
 
 
 class ActionsManager(BaseManager):
+    REPLACE_EVENT_CLASS = 'attack'
+
     def __init__(self, api_client):
         super().__init__(api_client)
     
@@ -144,6 +146,29 @@ class ActionsManager(BaseManager):
             return None
         return event.get('threat')
 
+    def _get_rule_event_class(self, rule):
+        """Возвращает класс события правила (event.class)."""
+        event = rule.get('event')
+        if not isinstance(event, dict):
+            return None
+        return event.get('class')
+
+    def _rule_matches_replace_filters(self, rule, threat_filter=None):
+        """Проверяет, подходит ли правило под фильтры замены (class=attack, опционально threat)."""
+        if self._get_rule_event_class(rule) != self.REPLACE_EVENT_CLASS:
+            return False
+        return self._rule_matches_threat_filter(rule, threat_filter)
+
+    def _filter_rules_for_replace(self, rules, threat_filter=None):
+        """Оставляет только правила с event.class = attack (и threat, если задан)."""
+        return [rule for rule in rules if self._rule_matches_replace_filters(rule, threat_filter)]
+
+    def _replace_filter_empty_message(self, threat_filter=None):
+        message = f"Не найдено правил с event.class = '{self.REPLACE_EVENT_CLASS}'"
+        if threat_filter is not None:
+            message += f" и threat = '{threat_filter}'"
+        return message
+
     def _collect_threat_levels(self, rules):
         """Собирает уникальные уровни threat из списка правил с количеством."""
         counts = {}
@@ -169,9 +194,9 @@ class ActionsManager(BaseManager):
             print("Не найдено правил для применения операции")
             return None
 
-        print("\n=== Область применения ===")
-        print("1. Применить ко всем правилам")
-        print("2. Применить по фильтру")
+        print("\n=== Область применения (только правила с event.class = attack) ===")
+        print("1. Применить ко всем правилам класса attack")
+        print("2. Применить по фильтру threat")
         print("3. Отмена")
 
         while True:
@@ -227,10 +252,10 @@ class ActionsManager(BaseManager):
             f"на '{action_data['new_action_name']}'"
         )
         if scope['mode'] == 'all':
-            return f"{base} во всех правилах {object_label} '{object_name}'?"
+            return f"{base} во всех правилах {object_label} '{object_name}' с классом 'attack'?"
         return (
             f"{base} в правилах {object_label} '{object_name}' "
-            f"с уровнем критичности '{scope['display']}'?"
+            f"с классом 'attack' и уровнем критичности '{scope['display']}'?"
         )
 
     def _extract_rule_actions(self, rule_data, prefer_configuration=False):
@@ -505,11 +530,10 @@ class ActionsManager(BaseManager):
             print("Не найдено правил в указанном шаблоне")
             return 0, 0
 
-        if threat_filter is not None:
-            rules = [rule for rule in rules if self._rule_matches_threat_filter(rule, threat_filter)]
-            if not rules:
-                print("Не найдено правил, соответствующих выбранному фильтру")
-                return 0, 0
+        rules = self._filter_rules_for_replace(rules, threat_filter)
+        if not rules:
+            print(self._replace_filter_empty_message(threat_filter))
+            return 0, 0
         
         total_replaced = 0
         total_rules = len(rules)
@@ -559,11 +583,10 @@ class ActionsManager(BaseManager):
             print("Не найдено правил в указанной политике")
             return 0, 0
 
-        if threat_filter is not None:
-            all_rules = [rule for rule in all_rules if self._rule_matches_threat_filter(rule, threat_filter)]
-            if not all_rules:
-                print("Не найдено правил, соответствующих выбранному фильтру")
-                return 0, 0
+        all_rules = self._filter_rules_for_replace(all_rules, threat_filter)
+        if not all_rules:
+            print(self._replace_filter_empty_message(threat_filter))
+            return 0, 0
         
         policy_template_id = self._get_policy_template_id(policy_id)
         template_rules_cache = {}
@@ -857,6 +880,10 @@ class ActionsManager(BaseManager):
         object_id = selected_object['id']
         object_name = selected_object.get('name', 'Без названия')
         rules = self._get_rules_for_object(object_type, object_id)
+        rules = self._filter_rules_for_replace(rules)
+        if not rules:
+            print(self._replace_filter_empty_message())
+            return
         scope = self._select_replace_scope(rules)
         if not scope:
             return
@@ -939,7 +966,11 @@ class ActionsManager(BaseManager):
             if action_type['type'] == 'add':
                 confirm_msg = f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' во все правила шаблона '{template_name}'?"
             else:
-                confirm_msg = f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' в шаблоне '{template_name}'?"
+                confirm_msg = (
+                    f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' "
+                    f"на '{action_data['new_action_name']}' в правилах с классом 'attack' "
+                    f"шаблона '{template_name}'?"
+                )
             
             if not self._confirm_action(confirm_msg):
                 print("Отмена операции")
@@ -970,7 +1001,11 @@ class ActionsManager(BaseManager):
             if action_type['type'] == 'add':
                 confirm_msg = f"Вы уверены, что хотите добавить действие '{action_data['new_action_name']}' во все правила политики '{policy_name}'?"
             else:
-                confirm_msg = f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' на '{action_data['new_action_name']}' в политике '{policy_name}'?"
+                confirm_msg = (
+                    f"Вы уверены, что хотите заменить действие '{action_data['old_action_name']}' "
+                    f"на '{action_data['new_action_name']}' в правилах с классом 'attack' "
+                    f"политики '{policy_name}'?"
+                )
             
             if not self._confirm_action(confirm_msg):
                 print("Отмена операции")
