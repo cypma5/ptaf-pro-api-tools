@@ -391,6 +391,24 @@ class APIClient:
             self._make_api_call, "PATCH", f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}", json=payload,
             operation_name=f"Изменение состояния правила {rule_id}"
         )
+
+    def update_user_rule_aggregation(self, template_id, rule_id, aggregation_data):
+        """Обновить настройки агрегации правила в наборе пользовательских правил"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH",
+            f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}/aggregation",
+            json=aggregation_data,
+            operation_name=f"Обновление агрегации правила {rule_id} в наборе пользовательских правил"
+        )
+    def update_policy_user_rule_aggregation(self, template_id, rule_id, aggregation_data):
+        """Обновить агрегацию пользовательского правила в шаблоне политики"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH",
+            f"config/policies/templates/user/{template_id}/user_rules/{rule_id}/aggregation",
+            json=aggregation_data,
+            operation_name=f"Обновление агрегации пользовательского правила {rule_id} в шаблоне"
+        )
+
     # ==================== УТИЛИТНЫЕ МЕТОДЫ ====================
     def _parse_response_items(self, response):
         """Парсит ответ API для извлечения items"""

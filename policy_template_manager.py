@@ -102,7 +102,7 @@ class PolicyTemplateManager(BaseManager):
         return response
 
     def create_rule(self, template_id, rule_data):
-        """Создает правило в шаблоне (для совместимости с _import_user_rules_changes)."""
+        """Создает правило в наборе пользовательских правил (with_user_rules)."""
         return self.api_client.create_user_rule(template_id, rule_data)
     
     def update_rule(self, template_id, rule_id, update_data):
@@ -333,20 +333,8 @@ class PolicyTemplateManager(BaseManager):
         global_list_ids = set()
         
         for rule_data in all_rules_data:
-            if 'actions' in rule_data and rule_data['actions']:
-                action_ids.update(rule_data['actions'])
-            
-            if 'variables' in rule_data and rule_data['variables']:
-                variables = rule_data['variables']
-                if 'dynamic_global_lists' in variables:
-                    dgl = variables['dynamic_global_lists']
-                    if 'value' in dgl and isinstance(dgl['value'], list):
-                        global_list_ids.update(dgl['value'])
-            
-            if 'aggregation' in rule_data and rule_data['aggregation']:
-                global_list_id = rule_data['aggregation'].get('global_list_id')
-                if global_list_id:
-                    global_list_ids.add(global_list_id)
+            action_ids.update(self._collect_rule_action_id_set(rule_data))
+            global_list_ids.update(self._collect_rule_global_list_ids(rule_data))
         
         related_actions = []
         if action_ids:
@@ -354,8 +342,9 @@ class PolicyTemplateManager(BaseManager):
             all_actions = self.get_available_actions()
             if all_actions:
                 # Сохраняем полные данные о действиях
+                normalized_action_ids = {str(aid) for aid in action_ids}
                 for action in all_actions:
-                    if action.get('id') in action_ids:
+                    if str(action.get('id')) in normalized_action_ids:
                         related_actions.append(action)
                 print(f"Найдено {len(related_actions)} действий")
         
@@ -368,7 +357,8 @@ class PolicyTemplateManager(BaseManager):
             all_lists = lists_manager.get_global_lists()
             
             if all_lists:
-                filtered_lists = [lst for lst in all_lists if lst.get('id') in global_list_ids]
+                normalized_list_ids = {str(lid) for lid in global_list_ids}
+                filtered_lists = [lst for lst in all_lists if str(lst.get('id')) in normalized_list_ids]
                 
                 for lst in filtered_lists:
                     list_id = lst.get('id')
@@ -423,6 +413,295 @@ class PolicyTemplateManager(BaseManager):
         except Exception as e:
             print(f"❌ Ошибка при сохранении шаблона: {e}")
             return None
+
+    def _collect_rule_action_ids(self, rule_data):
+        """Собирает ID действий из правила (configuration.actions и top-level actions), сохраняя порядок."""
+        seen = set()
+        ordered = []
+        for source in (rule_data.get('configuration') or {}, rule_data):
+            for action_id in (source.get('actions') or []):
+                key = str(action_id)
+                if key not in seen:
+                    seen.add(key)
+                    ordered.append(action_id)
+        return ordered
+
+    def _collect_rule_action_id_set(self, rule_data):
+        return set(self._collect_rule_action_ids(rule_data))
+
+    def _collect_rule_global_list_ids(self, rule_data):
+        """Собирает ID глобальных списков из правила (variables, parameters, aggregation)."""
+        global_list_ids = set()
+
+        def collect_from_variables(variables):
+            if not isinstance(variables, dict):
+                return
+            dgl = variables.get('dynamic_global_lists')
+            if isinstance(dgl, dict) and isinstance(dgl.get('value'), list):
+                global_list_ids.update(dgl['value'])
+
+        def collect_from_parameters(parameters):
+            if not isinstance(parameters, list):
+                return
+            for param in parameters:
+                if not isinstance(param, dict):
+                    continue
+                if param.get('global_list_id'):
+                    global_list_ids.add(param['global_list_id'])
+                value = param.get('value')
+                if isinstance(value, dict) and value.get('type') == 'GLOBAL_LIST_CIDR' and value.get('value'):
+                    global_list_ids.add(value['value'])
+
+        if rule_data.get('variables'):
+            collect_from_variables(rule_data['variables'])
+        configuration = rule_data.get('configuration') or {}
+        if configuration.get('variables'):
+            collect_from_variables(configuration['variables'])
+        if configuration.get('parameters'):
+            collect_from_parameters(configuration['parameters'])
+        aggregation = rule_data.get('aggregation') or {}
+        if aggregation.get('global_list_id'):
+            global_list_ids.add(aggregation['global_list_id'])
+        return global_list_ids
+
+    def _related_actions_index(self, related_actions):
+        return {
+            str(action.get('id')): action
+            for action in (related_actions or [])
+            if action.get('id')
+        }
+
+    def _map_action_id(self, action_id, action_mapping, related_actions_by_id=None, actions_manager=None):
+        if action_id is None:
+            return action_id
+        key = str(action_id)
+        if action_mapping and key in action_mapping:
+            return action_mapping[key]
+        if related_actions_by_id and key in related_actions_by_id and actions_manager:
+            target_action = actions_manager.find_or_create_action(related_actions_by_id[key])
+            if target_action:
+                new_id = target_action.get('id')
+                if action_mapping is not None:
+                    action_mapping[key] = new_id
+                return new_id
+        return action_id
+
+    def _apply_reference_mappings_to_rule_data(
+        self,
+        rule_data,
+        action_mapping,
+        global_list_mapping=None,
+        related_actions_by_id=None,
+        actions_manager=None,
+    ):
+        """Применяет маппинг действий и глобальных списков к данным правила перед созданием/обновлением."""
+        from actions_manager import ActionsManager
+
+        if actions_manager is None and (action_mapping or related_actions_by_id):
+            actions_manager = ActionsManager(self.api_client)
+
+        action_ids = list(self._collect_rule_action_ids(rule_data))
+        if action_ids:
+            mapped_actions = [
+                self._map_action_id(
+                    aid, action_mapping, related_actions_by_id, actions_manager
+                )
+                for aid in action_ids
+            ]
+            configuration = rule_data.setdefault('configuration', {})
+            configuration['actions'] = mapped_actions
+            rule_data.pop('actions', None)
+
+        if not global_list_mapping:
+            return rule_data
+
+        configuration = rule_data.setdefault('configuration', {})
+        variables = configuration.get('variables') or rule_data.get('variables')
+        if isinstance(variables, dict) and variables.get('dynamic_global_lists', {}).get('value'):
+            dgl = variables['dynamic_global_lists']
+            dgl['value'] = [
+                global_list_mapping.get(str(list_id), list_id)
+                for list_id in dgl['value']
+            ]
+            configuration['variables'] = variables
+            rule_data.pop('variables', None)
+
+        parameters = configuration.get('parameters')
+        if isinstance(parameters, list):
+            for param in parameters:
+                if not isinstance(param, dict):
+                    continue
+                if param.get('global_list_id'):
+                    param['global_list_id'] = global_list_mapping.get(
+                        str(param['global_list_id']), param['global_list_id']
+                    )
+                value = param.get('value')
+                if isinstance(value, dict) and value.get('type') == 'GLOBAL_LIST_CIDR' and value.get('value'):
+                    value['value'] = global_list_mapping.get(str(value['value']), value['value'])
+
+        aggregation = rule_data.get('aggregation')
+        if isinstance(aggregation, dict) and aggregation.get('global_list_id'):
+            aggregation['global_list_id'] = global_list_mapping.get(
+                str(aggregation['global_list_id']), aggregation['global_list_id']
+            )
+
+        return rule_data
+
+    def _ensure_related_actions_for_import(self, related_actions, rules_data, source_tenant_id, restore_tenant_id):
+        """Дополняет related_actions для старых экспортов, где не сохранились ссылки из configuration."""
+        related_actions = list(related_actions or [])
+        referenced_ids = set()
+        for rule_data in rules_data or []:
+            referenced_ids.update(str(aid) for aid in self._collect_rule_action_ids(rule_data))
+        existing_ids = {str(action.get('id')) for action in related_actions if action.get('id')}
+        missing_ids = referenced_ids - existing_ids
+        if not missing_ids or not source_tenant_id:
+            return related_actions
+
+        print(f"  Дополняем related_actions: не хватает {len(missing_ids)} действий из экспорта")
+        current_tenant_id = self.api_client.auth_manager.tenant_id
+        try:
+            self.api_client.auth_manager.tenant_id = source_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print("  ⚠️ Не удалось переключиться на исходный тенант для загрузки действий")
+                return related_actions
+            all_actions = self.get_available_actions() or []
+            for action in all_actions:
+                action_id = str(action.get('id'))
+                if action_id in missing_ids:
+                    related_actions.append(action)
+                    existing_ids.add(action_id)
+        finally:
+            self.api_client.auth_manager.tenant_id = restore_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+        still_missing = referenced_ids - existing_ids
+        if still_missing:
+            print(f"  ⚠️ Не найдены действия в исходном тенанте: {len(still_missing)}")
+        return related_actions
+
+    def _ensure_related_global_lists_for_import(self, related_global_lists, rules_data, source_tenant_id, restore_tenant_id):
+        """Дополняет related_global_lists для старых экспортов."""
+        related_global_lists = list(related_global_lists or [])
+        referenced_ids = set()
+        for rule_data in rules_data or []:
+            referenced_ids.update(str(lid) for lid in self._collect_rule_global_list_ids(rule_data))
+        existing_ids = {str(lst.get('id')) for lst in related_global_lists if lst.get('id')}
+        missing_ids = referenced_ids - existing_ids
+        if not missing_ids or not source_tenant_id:
+            return related_global_lists
+
+        print(f"  Дополняем related_global_lists: не хватает {len(missing_ids)} списков из экспорта")
+        from global_lists_manager import GlobalListsManager
+        lists_manager = GlobalListsManager(self.api_client)
+        current_tenant_id = self.api_client.auth_manager.tenant_id
+        try:
+            self.api_client.auth_manager.tenant_id = source_tenant_id
+            if not self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request):
+                print("  ⚠️ Не удалось переключиться на исходный тенант для загрузки глобальных списков")
+                return related_global_lists
+            all_lists = lists_manager.get_global_lists() or []
+            for gl_list in all_lists:
+                list_id = str(gl_list.get('id'))
+                if list_id in missing_ids:
+                    list_details = lists_manager.get_global_list_details(gl_list.get('id'))
+                    related_global_lists.append(list_details or gl_list)
+                    existing_ids.add(list_id)
+        finally:
+            self.api_client.auth_manager.tenant_id = restore_tenant_id
+            self.api_client.auth_manager.update_jwt_with_tenant(self.api_client.make_request)
+        still_missing = referenced_ids - existing_ids
+        if still_missing:
+            print(f"  ⚠️ Не найдены глобальные списки в исходном тенанте: {len(still_missing)}")
+        return related_global_lists
+
+    def _get_user_rules_set_id(self):
+        """ID набора пользовательских правил (with_user_rules) в текущем тенанте."""
+        sets = self.get_templates_with_user_rules() or []
+        if not sets:
+            return None
+        return sets[0].get('id')
+
+    def _sanitize_user_rule_create_data(self, rule_data):
+        """Готовит тело POST .../with_user_rules/{id}/rules по swagger (name, event, configuration)."""
+        configuration = (rule_data.get('configuration') or {}).copy()
+        sanitized = {
+            'name': rule_data.get('name'),
+            'configuration': {
+                'code': configuration.get('code', ''),
+                'actions': configuration.get('actions', []),
+                'parameters': configuration.get('parameters', []),
+            },
+        }
+        if rule_data.get('description') is not None:
+            sanitized['description'] = rule_data.get('description')
+        event = rule_data.get('event') or {}
+        sanitized['event'] = {
+            'class': event.get('class', 'attack'),
+            'threat': event.get('threat', 'medium'),
+            'tags': event.get('tags') or [],
+        }
+        if event.get('classifications'):
+            sanitized['event']['classifications'] = event['classifications']
+        meta = {
+            'enabled': rule_data.get('enabled'),
+            'aggregation': rule_data.get('aggregation'),
+        }
+        return sanitized, meta
+
+    def _describe_unmapped_references(self, rule_data, action_mapping, global_list_mapping):
+        """Человекочитаемая диагностика ссылок, которые могут вызвать reference_not_exist."""
+        lines = []
+        mapped_action_values = {str(v) for v in (action_mapping or {}).values()}
+        for action_id in self._collect_rule_action_ids(rule_data):
+            key = str(action_id)
+            if action_mapping and key not in action_mapping and str(action_id) not in mapped_action_values:
+                lines.append(f"  - действие {action_id} (нет в маппинге целевого тенанта)")
+        for list_id in self._collect_rule_global_list_ids(rule_data):
+            key = str(list_id)
+            if global_list_mapping and key not in global_list_mapping:
+                lines.append(f"  - глобальный список {list_id} (нет в маппинге целевого тенанта)")
+        event = rule_data.get('event') or {}
+        for cls_id in (event.get('classifications') or []):
+            lines.append(
+                f"  - классификация события {cls_id} (UUID из исходного тенанта, маппинг не выполняется)"
+            )
+        config = rule_data.get('configuration') or {}
+        if 'code' not in config:
+            lines.append("  - отсутствует configuration.code (обязательное поле по API)")
+        return lines
+
+    def _create_user_rule_in_set(self, user_rules_set_id, rule_data, action_mapping, global_list_mapping,
+                                 related_actions_by_id, preserve_state):
+        """Создаёт правило в наборе with_user_rules и при необходимости выставляет enabled/агрегацию."""
+        create_data = rule_data.copy()
+        for field in (
+            'id', 'original_id', 'original_name', 'template_type', 'has_user_rules',
+            'is_system', 'rule_id', 'variables', 'actions', 'has_overrides',
+        ):
+            create_data.pop(field, None)
+        self._apply_reference_mappings_to_rule_data(
+            create_data, action_mapping, global_list_mapping, related_actions_by_id
+        )
+        payload, meta = self._sanitize_user_rule_create_data(create_data)
+        aggregation_data = meta.get('aggregation')
+        enabled = meta.get('enabled') if preserve_state else None
+
+        resp = self.api_client.create_user_rule(user_rules_set_id, payload)
+        if not resp or resp.status_code not in (200, 201):
+            return None, resp, payload
+
+        created = resp.json() if hasattr(resp, 'json') else {}
+        rule_id = created.get('id')
+        if rule_id and enabled is not None:
+            self.api_client.enable_user_rule(user_rules_set_id, rule_id, enabled)
+        if rule_id and aggregation_data:
+            agg_copy = aggregation_data.copy()
+            if global_list_mapping and agg_copy.get('global_list_id'):
+                agg_copy['global_list_id'] = global_list_mapping.get(
+                    str(agg_copy['global_list_id']), agg_copy['global_list_id']
+                )
+            self.api_client.update_user_rule_aggregation(user_rules_set_id, rule_id, agg_copy)
+        return created, resp, payload
     
     # ==================== ИМПОРТ ШАБЛОНА ====================
     
@@ -454,9 +733,15 @@ class PolicyTemplateManager(BaseManager):
                 action_name = action.get('name', f'Действие {i}')
                 action_type_id = action.get('type_id')
                 
-                # Пропускаем системные действия
+                # Системные действия: ищем соответствие в целевом тенанте по имени и типу
                 if action.get('is_system', True):
-                    print(f"    [{i}] ⚠️ Пропускаем системное действие: {action_name}")
+                    existing = actions_manager.get_actions_by_name_and_type(action_name, action_type_id)
+                    if existing:
+                        action_mapping[str(original_action_id)] = existing.get('id')
+                        found_count += 1
+                        print(f"      ✓ Системное действие сопоставлено (ID: {existing.get('id')})")
+                    else:
+                        print(f"      ⚠️ Системное действие не найдено в целевом тенанте: {action_name}")
                     continue
                 
                 print(f"    [{i}] Обработка действия: {action_name}")
@@ -466,7 +751,7 @@ class PolicyTemplateManager(BaseManager):
                 
                 if target_action:
                     new_action_id = target_action.get('id')
-                    action_mapping[original_action_id] = new_action_id
+                    action_mapping[str(original_action_id)] = new_action_id
                     
                     if target_action.get('id') == original_action_id:
                         found_count += 1
@@ -672,64 +957,50 @@ class PolicyTemplateManager(BaseManager):
         return imported_count, failed_count
 
     def _import_user_rules_from_file_data(self, template_id, user_rules_data, action_mapping, global_list_mapping,
-                                          preserve_state):
-        """Создаёт в целевом шаблоне только правила из user_rules_data (импорт из файла), без экспорта всего набора."""
+                                          preserve_state, related_actions_by_id=None):
+        """Создаёт правила в наборе with_user_rules (глобальный набор пользовательских правил).
+
+        template_id — шаблон политики (USER_POLICY); локальные переназначения применяются на шаге 3.
+        По swagger POST .../with_user_rules/{id}/rules — только для набора, не для шаблона политики.
+        """
         if not user_rules_data:
             return 0, 0
         imported_count = 0
         failed_count = 0
-        print(f"\n  Создание пользовательских правил из файла ({len(user_rules_data)} правил)...")
-        existing = self.get_policy_user_rules_in_template(template_id) or []
+
+        user_rules_set_id = self._get_user_rules_set_id()
+        if not user_rules_set_id:
+            print("\n  ✗ Не найден набор пользовательских правил (with_user_rules) в целевом тенанте")
+            return 0, len(user_rules_data)
+
+        print(f"\n  Создание пользовательских правил в наборе with_user_rules ({len(user_rules_data)} правил)...")
+        print(f"    Набор пользовательских правил ID: {user_rules_set_id}")
+        print(f"    Шаблон политики ID (переназначения — шаг 3): {template_id}")
+
+        existing = self.get_user_rules(user_rules_set_id) or []
         existing_by_name = {r.get('name'): r for r in existing if r.get('name')}
+
         for i, rule_data in enumerate(user_rules_data, 1):
             rule_name = rule_data.get('name', f'Пользовательское правило {i}')
             if rule_name in existing_by_name:
-                print(f"    [{i}/{len(user_rules_data)}] Правило '{rule_name}' уже есть в шаблоне, пропускаем создание")
+                print(f"    [{i}/{len(user_rules_data)}] Правило '{rule_name}' уже есть в наборе, пропускаем создание")
                 continue
-            create_data = rule_data.copy()
-            for field in ('id', 'original_id', 'original_name', 'template_type', 'has_user_rules'):
-                create_data.pop(field, None)
-            actions = create_data.get('actions') or (create_data.get('configuration') or {}).get('actions') or []
-            if actions and action_mapping:
-                mapped = [action_mapping.get(str(aid), aid) for aid in actions]
-                if 'configuration' not in create_data:
-                    create_data['configuration'] = {}
-                create_data['configuration']['actions'] = mapped
-            if global_list_mapping and create_data.get('configuration'):
-                config = create_data['configuration']
-                if config.get('variables', {}).get('dynamic_global_lists', {}).get('value'):
-                    dgl = config['variables']['dynamic_global_lists']
-                    dgl['value'] = [global_list_mapping.get(str(lid), lid) for lid in dgl['value']]
-                for param in (config.get('parameters') or []):
-                    if 'global_list_id' in param and param['global_list_id']:
-                        param['global_list_id'] = global_list_mapping.get(str(param['global_list_id']), param['global_list_id'])
-            if global_list_mapping and create_data.get('aggregation', {}).get('global_list_id'):
-                create_data['aggregation']['global_list_id'] = global_list_mapping.get(
-                    str(create_data['aggregation']['global_list_id']), create_data['aggregation']['global_list_id'])
-            if preserve_state and 'enabled' in rule_data:
-                create_data['enabled'] = rule_data['enabled']
-            template_type = rule_data.get('template_type', 'user')
             try:
-                if template_type == 'with_user_rules':
-                    resp = self.create_user_rule(template_id, create_data)
-                else:
-                    resp = self.create_rule(template_id, create_data)
-                if resp and resp.status_code in (200, 201):
-                    if preserve_state and 'enabled' in rule_data and resp.status_code == 201:
-                        try:
-                            created = resp.json() or {}
-                            rid = created.get('id')
-                            if rid and template_type != 'with_user_rules':
-                                self.update_policy_user_rule_in_template(template_id, rid, {"enabled": rule_data["enabled"]})
-                            elif rid:
-                                self.update_user_rule(template_id, rid, {"enabled": rule_data["enabled"]})
-                        except Exception:
-                            pass
-                    print(f"    [{i}/{len(user_rules_data)}] ✅ Правило '{rule_name}' создано")
+                created, resp, payload = self._create_user_rule_in_set(
+                    user_rules_set_id, rule_data, action_mapping, global_list_mapping,
+                    related_actions_by_id, preserve_state,
+                )
+                if created:
+                    print(f"    [{i}/{len(user_rules_data)}] ✅ Правило '{rule_name}' создано в наборе (ID: {created.get('id')})")
                     imported_count += 1
                 else:
-                    msg = getattr(resp, 'text', None) or 'Неизвестная ошибка'
-                    print(f"    [{i}/{len(user_rules_data)}] ✗ Ошибка создания '{rule_name}': {msg}")
+                    print(f"    [{i}/{len(user_rules_data)}] ✗ Ошибка создания '{rule_name}' в наборе with_user_rules")
+                    self._print_rule_update_error(resp, payload, "правила в наборе", error_verb="создании")
+                    hints = self._describe_unmapped_references(rule_data, action_mapping, global_list_mapping)
+                    if hints:
+                        print("      Возможные причины reference_not_exist:")
+                        for hint in hints:
+                            print(hint)
                     failed_count += 1
             except Exception as e:
                 print(f"    [{i}/{len(user_rules_data)}] ✗ Ошибка создания '{rule_name}': {e}")
@@ -738,7 +1009,7 @@ class PolicyTemplateManager(BaseManager):
 
     def _import_user_rules_to_template(self, template_id, user_rules_data, action_mapping, preserve_state=True,
                                       source_tenant_id=None, target_tenant_id=None, use_file_data_only=False,
-                                      global_list_mapping=None):
+                                      global_list_mapping=None, related_actions_by_id=None):
         """Импортирует пользовательские правила в шаблон.
 
         Если use_file_data_only=True (импорт из файла), создаются только правила из user_rules_data
@@ -750,7 +1021,8 @@ class PolicyTemplateManager(BaseManager):
         # Режим «только из файла»: создаём в целевом тенанте только правила из user_rules_data
         if use_file_data_only:
             return self._import_user_rules_from_file_data(
-                template_id, user_rules_data, action_mapping, global_list_mapping or {}, preserve_state
+                template_id, user_rules_data, action_mapping, global_list_mapping or {}, preserve_state,
+                related_actions_by_id
             )
         
         print(f"\n  Используем логику 'Копирование правил в другой тенант'...")
@@ -869,15 +1141,13 @@ class PolicyTemplateManager(BaseManager):
 
 
     def _import_user_rules_changes(self, target_template_id, user_rules_data, action_mapping, 
-                                global_list_mapping=None, preserve_state=True):
+                                global_list_mapping=None, preserve_state=True, related_actions_by_id=None):
         """Применяет изменения к пользовательским правилам в целевом шаблоне"""
         if not user_rules_data:
             return 0, 0  # imported_count, failed_count
         
         imported_count = 0
         failed_count = 0
-        
-        print(f"\n  Импорт изменений в {len(user_rules_data)} пользовательских правил:")
         
         for i, rule_data in enumerate(user_rules_data, 1):
             rule_name = rule_data.get('name', f'Пользовательское правило {i}')
@@ -887,245 +1157,100 @@ class PolicyTemplateManager(BaseManager):
             
             print(f"    [{i}/{len(user_rules_data)}] Правило: {rule_name}")
             
-            # ШАГ 1: Поиск существующего правила в целевом тенанте
             target_rule = None
+            # Ищем правило в шаблоне политики (локальный экземпляр для переназначений)
+            user_rules = self.get_policy_user_rules_in_template(target_template_id)
+            if user_rules:
+                for rule in user_rules:
+                    if (rule.get('id') == original_id or rule.get('name') == rule_name):
+                        target_rule = rule
+                        break
             
-            if template_type == 'with_user_rules':
-                # Это отдельный набор пользовательских правил
-                # Получаем все правила из набора
-                user_rules = self.get_user_rules(target_template_id)
-                if user_rules:
-                    # Ищем по original_id или имени
-                    for rule in user_rules:
-                        if (rule.get('id') == original_id or 
-                            rule.get('name') == rule_name):
-                            target_rule = rule
-                            break
-            else:
-                # Это обычный шаблон с пользовательскими правилами
-                # Получаем пользовательские правила внутри шаблона
-                user_rules = self.get_policy_user_rules_in_template(target_template_id)
-                if user_rules:
-                    # Ищем по original_id или имени
-                    for rule in user_rules:
-                        if (rule.get('id') == original_id or 
-                            rule.get('name') == rule_name):
-                            target_rule = rule
-                            break
-            
-            # ШАГ 2: Если правило не найдено, создаем новое
+            # Если правило не найдено в шаблоне политики — создаём в наборе with_user_rules
             if not target_rule:
-                print(f"      ⚠️ Правило не найдено в целевом тенанте, создаем новое...")
-                
-                # Подготавливаем данные для создания
-                create_data = rule_data.copy()
-                
-                # Удаляем системные поля
-                for field in ['id', 'original_id', 'original_name', 
-                            'template_type', 'has_user_rules']:
-                    if field in create_data:
-                        del create_data[field]
-                
-                # Применяем маппинг действий
-                if 'actions' in create_data:
-                    mapped_actions = []
-                    for action_id in create_data['actions']:
-                        if str(action_id) in action_mapping:
-                            mapped_actions.append(action_mapping[str(action_id)])
-                        else:
-                            mapped_actions.append(action_id)
-                    create_data['actions'] = mapped_actions
-                
-                # Применяем маппинг глобальных списков
-                if global_list_mapping:
-                    # В конфигурации
-                    if 'configuration' in create_data:
-                        config = create_data['configuration']
-                        # Обработка variables
-                        if 'variables' in config:
-                            variables = config['variables']
-                            # Динамические глобальные списки
-                            if 'dynamic_global_lists' in variables:
-                                dgl = variables['dynamic_global_lists']
-                                if 'value' in dgl and isinstance(dgl['value'], list):
-                                    mapped_dgl = []
-                                    for list_id in dgl['value']:
-                                        if str(list_id) in global_list_mapping:
-                                            mapped_dgl.append(global_list_mapping[str(list_id)])
-                                        else:
-                                            mapped_dgl.append(list_id)
-                                    dgl['value'] = mapped_dgl
-                    
-                    # В агрегации
-                    if 'aggregation' in create_data and global_list_mapping:
-                        aggregation = create_data['aggregation']
-                        if 'global_list_id' in aggregation:
-                            gl_id = aggregation['global_list_id']
-                            aggregation['global_list_id'] = global_list_mapping.get(str(gl_id), gl_id)
-                
-                # Состояние (enabled): при сохранении берём из исходных данных, иначе включаем
-                if preserve_state and 'enabled' in rule_data:
-                    create_data['enabled'] = rule_data['enabled']
-                elif not preserve_state:
-                    create_data['enabled'] = True
-                
-                # Создаем правило в зависимости от типа шаблона
-                if template_type == 'with_user_rules':
-                    response = self.create_user_rule(target_template_id, create_data)
-                else:
-                    # Для обычного шаблона используем создание правила
-                    create_response = self.create_rule(target_template_id, create_data)
-                    
-                    # Проверяем ответ
-                    if create_response and create_response.status_code == 201:
-                        # Получаем ID созданного правила
-                        new_rule_data = create_response.json()
-                        rule_id = new_rule_data.get('id')
-                        
-                        # Если нужно, обновляем пользовательское правило
-                        if 'is_user_rule' in create_data and create_data['is_user_rule']:
-                            # Преобразуем в пользовательское правило
-                            update_data = {
-                                "enabled": create_data.get('enabled', True),
-                                "configuration": create_data.get('configuration', {})
-                            }
-                            response = self.update_policy_user_rule_in_template(
-                                target_template_id, rule_id, update_data
-                            )
-                        else:
-                            response = create_response
-                    else:
-                        response = create_response
-                
-                if response and response.status_code in [200, 201]:
-                    # После создания при необходимости явно выставляем состояние (API может игнорировать enabled при POST)
-                    if preserve_state and 'enabled' in rule_data:
-                        try:
-                            created = response.json() if hasattr(response, 'json') else {}
-                            new_rule_id = created.get('id')
-                            if new_rule_id:
-                                if template_type == 'with_user_rules':
-                                    self.update_user_rule(target_template_id, new_rule_id, {"enabled": rule_data["enabled"]})
-                                else:
-                                    self.update_policy_user_rule_in_template(
-                                        target_template_id, new_rule_id, {"enabled": rule_data["enabled"]}
-                                    )
-                                print(f"      Состояние: {'включено' if rule_data['enabled'] else 'выключено'}")
-                        except Exception as e:
-                            print(f"      ⚠️ Не удалось выставить состояние правила: {e}")
-                    print(f"      ✅ Правило '{rule_name}' успешно создано")
-                    imported_count += 1
+                print(f"      ⚠️ Правило не найдено в шаблоне политики, создаём в наборе with_user_rules...")
+                user_rules_set_id = self._get_user_rules_set_id()
+                if not user_rules_set_id:
+                    print("      ✗ Набор with_user_rules не найден")
+                    failed_count += 1
                     continue
-                else:
-                    self._print_rule_update_error(response, create_data, "правила", error_verb="создании")
+                created, resp, payload = self._create_user_rule_in_set(
+                    user_rules_set_id, rule_data, action_mapping, global_list_mapping,
+                    related_actions_by_id, preserve_state,
+                )
+                if not created:
+                    self._print_rule_update_error(resp, payload, "правила в наборе", error_verb="создании")
+                    hints = self._describe_unmapped_references(rule_data, action_mapping, global_list_mapping)
+                    if hints:
+                        print("      Возможные причины reference_not_exist:")
+                        for hint in hints:
+                            print(hint)
+                    failed_count += 1
+                    continue
+                print(f"      ✅ Создано в наборе (ID: {created.get('id')}), ищем в шаблоне политики...")
+                user_rules = self.get_policy_user_rules_in_template(target_template_id) or []
+                for rule in user_rules:
+                    if rule.get('name') == rule_name:
+                        target_rule = rule
+                        break
+                if not target_rule:
+                    print(f"      ⚠️ Правило '{rule_name}' создано в наборе, но ещё не видно в шаблоне политики — пропуск переназначений")
                     failed_count += 1
                     continue
             
-            # ШАГ 3: Обновление существующего правила
+            # Обновление локальных переназначений в шаблоне политики
             target_rule_id = target_rule.get('id')
             print(f"      ✓ Найдено правило в целевом тенанте (ID: {target_rule_id})")
             
-            # Подготавливаем данные для обновления
+            # Подготавливаем данные для обновления (PATCH templates/user/{id}/user_rules/{rule_id})
             update_data = {}
-            
-            # 1. Обновляем действия с использованием маппинга
-            original_actions = rule_data.get('actions', [])
-            if original_actions:
-                mapped_actions = []
-                for action_id in original_actions:
-                    if str(action_id) in action_mapping:
-                        mapped_actions.append(action_mapping[str(action_id)])
-                    else:
-                        mapped_actions.append(action_id)  # Для системных действий
-                
-                update_data['actions'] = mapped_actions
-                print(f"      Обновлено {len(mapped_actions)} действий")
-            
-            # 2. Обновляем конфигурацию
-            if 'configuration' in rule_data:
-                config_copy = rule_data['configuration'].copy()
-                
-                # Применяем маппинг глобальных списков в конфигурации
-                if global_list_mapping and 'variables' in config_copy:
-                    variables = config_copy['variables']
-                    if 'dynamic_global_lists' in variables:
-                        dgl = variables['dynamic_global_lists']
-                        if 'value' in dgl and isinstance(dgl['value'], list):
-                            mapped_dgl = []
-                            for list_id in dgl['value']:
-                                if str(list_id) in global_list_mapping:
-                                    mapped_dgl.append(global_list_mapping[str(list_id)])
-                                else:
-                                    mapped_dgl.append(list_id)
-                            dgl['value'] = mapped_dgl
-                
-                update_data['configuration'] = config_copy
-                print(f"      Обновлена конфигурация")
-            
-            # 3. Сохраняем состояние, если нужно
-            if 'enabled' in rule_data and preserve_state:
+            mapped_rule = rule_data.copy()
+            self._apply_reference_mappings_to_rule_data(
+                mapped_rule, action_mapping, global_list_mapping, related_actions_by_id
+            )
+
+            if preserve_state and 'enabled' in rule_data:
                 update_data['enabled'] = rule_data['enabled']
+            if mapped_rule.get('variables'):
+                update_data['variables'] = mapped_rule['variables']
+            configuration = mapped_rule.get('configuration')
+            if configuration:
+                config_update = {}
+                if configuration.get('actions') is not None:
+                    config_update['actions'] = configuration['actions']
+                if configuration.get('parameters') is not None:
+                    config_update['parameters'] = configuration['parameters']
+                if config_update:
+                    update_data['configuration'] = config_update
+                    print(f"      Обновлена конфигурация (actions/parameters)")
+            
+            if preserve_state and 'enabled' in rule_data:
                 print(f"      Состояние: {'включено' if rule_data['enabled'] else 'выключено'}")
-            
-            # 4. Обновляем переменные (если не в конфигурации)
-            if 'variables' in rule_data and rule_data['variables']:
-                variables_copy = rule_data['variables'].copy()
-                
-                # Применяем маппинг глобальных списков в переменных
-                if global_list_mapping and 'dynamic_global_lists' in variables_copy:
-                    dgl = variables_copy['dynamic_global_lists']
-                    if 'value' in dgl and isinstance(dgl['value'], list):
-                        mapped_dgl = []
-                        for list_id in dgl['value']:
-                            if str(list_id) in global_list_mapping:
-                                mapped_dgl.append(global_list_mapping[str(list_id)])
-                            else:
-                                mapped_dgl.append(list_id)
-                        dgl['value'] = mapped_dgl
-                
-                update_data['variables'] = variables_copy
-                print(f"      Обновлены переменные")
-            
-            # 5. Обновляем агрегацию (только если агрегация включена)
+
+            # Агрегация — отдельный PATCH (если включена)
             if 'aggregation' in rule_data and rule_data['aggregation']:
                 aggregation_copy = rule_data['aggregation'].copy()
                 if aggregation_copy.get('enabled') is False:
                     print(f"      Агрегация выключена — обновление агрегации пропущено")
-                else:
-                    # Применяем маппинг глобальных списков в агрегации (ключи в маппинге — строки)
-                    if global_list_mapping and 'global_list_id' in aggregation_copy:
-                        gl_id = aggregation_copy['global_list_id']
-                        mapped_id = global_list_mapping.get(str(gl_id), gl_id)
-                        aggregation_copy['global_list_id'] = mapped_id
-                        if mapped_id == gl_id and global_list_mapping:
-                            print(f"      ⚠ Глобальный список {gl_id} не найден в маппинге при обновлении агрегации")
-                    
-                    # Для обновления агрегации нужен отдельный запрос
-                    agg_response = self.update_rule_aggregation(
+                elif global_list_mapping and aggregation_copy.get('global_list_id'):
+                    gl_id = aggregation_copy['global_list_id']
+                    aggregation_copy['global_list_id'] = global_list_mapping.get(str(gl_id), gl_id)
+                    agg_response = self.api_client.update_policy_user_rule_aggregation(
                         target_template_id, target_rule_id, aggregation_copy
                     )
-                    
                     if agg_response and agg_response.status_code == 200:
                         print(f"      ✅ Настройки агрегации обновлены")
                     else:
                         self._print_aggregation_update_error(agg_response, aggregation_copy)
-            
+
             if not update_data:
-                print(f"      ⚠️ Нет данных для обновления, пропускаем")
+                print(f"      ⚠️ Нет данных для обновления переназначений, пропускаем")
                 failed_count += 1
                 continue
-            
-            # ШАГ 4: Отправляем запрос на обновление
-            if template_type == 'with_user_rules':
-                response = self.update_user_rule(target_template_id, target_rule_id, update_data)
-            else:
-                # Для обычного шаблона
-                if target_rule.get('is_user_rule', False):
-                    response = self.update_policy_user_rule_in_template(
-                        target_template_id, target_rule_id, update_data
-                    )
-                else:
-                    response = self.update_rule(target_template_id, target_rule_id, update_data)
+
+            response = self.update_policy_user_rule_in_template(
+                target_template_id, target_rule_id, update_data
+            )
             
             if response and response.status_code == 200:
                 print(f"      ✅ Изменения успешно применены")
@@ -1184,8 +1309,15 @@ class PolicyTemplateManager(BaseManager):
                 return False
         
         try:
+            related_actions = self._ensure_related_actions_for_import(
+                related_actions, system_rules_data + user_rules_data, source_tenant_id, original_tenant_id
+            )
+            related_global_lists = self._ensure_related_global_lists_for_import(
+                related_global_lists, system_rules_data + user_rules_data, source_tenant_id, original_tenant_id
+            )
             print("\n1. Создаем маппинг действий...")
             action_mapping = self._create_action_mapping(related_actions, target_tenant_id)
+            related_actions_by_id = self._related_actions_index(related_actions)
             print(f"  ✓ Создан маппинг для {len(action_mapping)} действий")
             
             print("\n2. Создаем маппинг глобальных списков...")
@@ -1232,12 +1364,13 @@ class PolicyTemplateManager(BaseManager):
             # ШАГ 1: Копирование пользовательских правил через RulesManager
             user_imported_1, user_failed_1 = 0, 0
             if has_user_rules and user_rules_data:
-                print(f"\n  ШАГ 1: Копирование пользовательских правил из файла...")
+                print(f"\n  ШАГ 1: Создание правил в наборе пользовательских правил (with_user_rules)...")
                 user_imported_1, user_failed_1 = self._import_user_rules_to_template(
                     target_template_id, user_rules_data, action_mapping, preserve_state,
                     source_tenant_id, target_tenant_id,
                     use_file_data_only=True,
-                    global_list_mapping=global_list_mapping
+                    global_list_mapping=global_list_mapping,
+                    related_actions_by_id=related_actions_by_id,
                 )
             
             # ШАГ 2: Применение изменений к системным правилам
@@ -1252,10 +1385,10 @@ class PolicyTemplateManager(BaseManager):
             # ШАГ 3: Применение изменений к пользовательским правилам
             user_imported_2, user_failed_2 = 0, 0
             if user_rules_data:
-                print(f"\n  ШАГ 3: Применение изменений к пользовательским правилам...")
+                print(f"\n  ШАГ 3: Локальные переназначения пользовательских правил в шаблоне политики...")
                 user_imported_2, user_failed_2 = self._import_user_rules_changes(
                     target_template_id, user_rules_data, action_mapping, 
-                    global_list_mapping, preserve_state
+                    global_list_mapping, preserve_state, related_actions_by_id,
                 )
             
             # Суммируем результаты
@@ -1270,7 +1403,7 @@ class PolicyTemplateManager(BaseManager):
             print(f"  - Всего записей в файле: {total_rules} (системных с изменениями: {num_system}, пользовательских: {num_user})")
             print(f"  - Успешно обработано: {total_imported}")
             print(f"    • Системные правила: применено изменений {system_imported} из {num_system}")
-            print(f"    • Пользовательские правила: создано {user_imported_1}, обновлено {user_imported_2} (всего в файле: {num_user})")
+            print(f"    • Пользовательские правила: создано в наборе {user_imported_1}, переназначения в шаблоне {user_imported_2} (всего в файле: {num_user})")
             print(f"  - Не удалось обработать: {total_failed} (системные: {system_failed}, пользовательские: {user_failed_1 + user_failed_2})")
             print(f"  - Маппинг действий: {len(action_mapping)}")
             print(f"  - Маппинг глобальных списков: {len(global_list_mapping)}")
