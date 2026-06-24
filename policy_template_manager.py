@@ -284,8 +284,216 @@ class PolicyTemplateManager(BaseManager):
             print(f"  ⚠️ Не удалось получить состояние правил в политиках приложений: {e}")
             return None
         return enabled_names
+
+    def _get_policies_using_template(self, template_id, policy_id=None):
+        """Политики безопасности веб-приложений, использующих шаблон (или одна политика по policy_id)."""
+        if policy_id:
+            application_name = None
+            try:
+                apps_resp = self.api_client.get_applications()
+                applications = self._parse_response_items(apps_resp) or []
+                for app in applications:
+                    if app.get("policy_id") == policy_id:
+                        application_name = app.get("name")
+                        break
+            except Exception:
+                pass
+            policy_name = None
+            policy_resp = self.api_client.get_policy_details(policy_id)
+            if policy_resp and policy_resp.status_code == 200:
+                policy_name = policy_resp.json().get("name")
+            return [{
+                "policy_id": policy_id,
+                "policy_name": policy_name,
+                "application_name": application_name,
+            }]
+
+        result = []
+        seen_policy_ids = set()
+        try:
+            apps_resp = self.api_client.get_applications()
+            applications = self._parse_response_items(apps_resp) or []
+            for app in applications:
+                if app.get("policy_template_id") != template_id:
+                    continue
+                pid = app.get("policy_id")
+                if not pid or pid in seen_policy_ids:
+                    continue
+                seen_policy_ids.add(pid)
+                policy_name = None
+                policy_resp = self.api_client.get_policy_details(pid)
+                if policy_resp and policy_resp.status_code == 200:
+                    policy_name = policy_resp.json().get("name")
+                result.append({
+                    "policy_id": pid,
+                    "policy_name": policy_name,
+                    "application_name": app.get("name"),
+                })
+        except Exception as e:
+            print(f"  ⚠️ Не удалось получить политики приложений: {e}")
+        return result
+
+    def _normalize_policy_system_rule_for_export(self, details):
+        entry = {
+            "name": details.get("name"),
+            "is_system": True,
+            "has_overrides": True,
+        }
+        if details.get("enabled") is not None:
+            entry["enabled"] = details["enabled"]
+        if details.get("actions") is not None:
+            entry["actions"] = details["actions"]
+        if details.get("variables"):
+            entry["variables"] = details["variables"]
+        return entry
+
+    def _normalize_policy_user_rule_for_export(self, details):
+        entry = {
+            "name": details.get("name"),
+            "is_system": False,
+            "has_overrides": True,
+        }
+        if details.get("enabled") is not None:
+            entry["enabled"] = details["enabled"]
+        if details.get("variables"):
+            entry["variables"] = details["variables"]
+        configuration = details.get("configuration")
+        if isinstance(configuration, dict) and configuration:
+            entry["configuration"] = configuration
+        elif details.get("actions") is not None:
+            entry["actions"] = details["actions"]
+        return entry
+
+    def _policy_user_rule_differs_from_template(self, details, template_by_name):
+        """Локальное переназначение пользовательского правила на уровне политики vs шаблон."""
+        name = details.get("name")
+        if not name:
+            return bool(details.get("variables"))
+        template_rule = template_by_name.get(name)
+        if not template_rule:
+            cfg = details.get("configuration") or {}
+            return bool(details.get("variables") or cfg.get("parameters") or cfg.get("actions"))
+        if details.get("enabled") != template_rule.get("enabled"):
+            return True
+        if details.get("variables") and details.get("variables") != template_rule.get("variables"):
+            return True
+        policy_cfg = details.get("configuration") or {}
+        template_cfg = template_rule.get("configuration") or {}
+        if policy_cfg.get("actions") != template_cfg.get("actions"):
+            return True
+        if policy_cfg.get("parameters") != template_cfg.get("parameters"):
+            return True
+        return False
+
+    def _get_policy_system_rules_with_overrides(self, policy_id, policy_label):
+        print(f"Получение локальных переназначений системных правил политики ({policy_label})...")
+        rules_resp = self.api_client.get_policy_system_rules(policy_id)
+        rules = self._parse_response_items(rules_resp) or []
+        with_overrides = [r for r in rules if r.get("has_overrides")]
+        print(
+            f"  Найдено {len(with_overrides)} системных правил с локальными изменениями "
+            f"из {len(rules)} всего"
+        )
+        full_rules_data = []
+        for i, rule in enumerate(with_overrides, 1):
+            rule_id = rule.get("id")
+            rule_name = rule.get("name", f"Системное правило {i}")
+            print(f"    [{i}/{len(with_overrides)}] Получение деталей: {rule_name}")
+            resp = self.api_client.get_policy_system_rule_details(policy_id, rule_id)
+            if resp and resp.status_code == 200:
+                full_rules_data.append(self._normalize_policy_system_rule_for_export(resp.json()))
+        return full_rules_data
+
+    def _get_policy_user_rules_with_overrides(
+        self, policy_id, policy_label, template_user_rules_by_name, deep_compare=False
+    ):
+        print(f"Получение локальных переназначений пользовательских правил политики ({policy_label})...")
+        rules_resp = self.api_client.get_policy_user_rules(policy_id)
+        rules = self._parse_response_items(rules_resp) or []
+        candidates = []
+        seen_ids = set()
+
+        for rule in rules:
+            if rule.get("has_overrides"):
+                rule_id = rule.get("id")
+                if rule_id and rule_id not in seen_ids:
+                    seen_ids.add(rule_id)
+                    candidates.append(rule)
+
+        if deep_compare:
+            for rule in rules:
+                rule_id = rule.get("id")
+                if not rule_id or rule_id in seen_ids:
+                    continue
+                resp = self.api_client.get_policy_user_rule_details(policy_id, rule_id)
+                if not resp or resp.status_code != 200:
+                    continue
+                if self._policy_user_rule_differs_from_template(resp.json(), template_user_rules_by_name):
+                    seen_ids.add(rule_id)
+                    candidates.append(rule)
+
+        print(
+            f"  Найдено {len(candidates)} пользовательских правил с локальными изменениями "
+            f"из {len(rules)} всего"
+        )
+        full_rules_data = []
+        for i, rule in enumerate(candidates, 1):
+            rule_id = rule.get("id")
+            rule_name = rule.get("name", f"Пользовательское правило {i}")
+            print(f"    [{i}/{len(candidates)}] Получение деталей: {rule_name}")
+            resp = self.api_client.get_policy_user_rule_details(policy_id, rule_id)
+            if resp and resp.status_code == 200:
+                full_rules_data.append(self._normalize_policy_user_rule_for_export(resp.json()))
+        return full_rules_data
+
+    def _get_policy_overrides_for_export(self, template_id, policy_id=None, template_user_rules_data=None):
+        """Локальные переназначения правил на уровне политики безопасности (не шаблона)."""
+        policies = self._get_policies_using_template(template_id, policy_id=policy_id)
+        if not policies:
+            if policy_id:
+                print("Локальные переназначения в политике безопасности: политика не найдена.")
+            else:
+                print(
+                    "Локальные переназначения в политиках безопасности: "
+                    "приложений с этим шаблоном не найдено."
+                )
+            return []
+
+        template_user_rules_by_name = {}
+        for rule in template_user_rules_data or []:
+            name = rule.get("name") or rule.get("original_name")
+            if name:
+                template_user_rules_by_name[name] = rule
+
+        deep_compare_user = policy_id is not None
+        policy_overrides = []
+        for pol in policies:
+            pid = pol["policy_id"]
+            label = pol.get("application_name") or pol.get("policy_name") or pid
+            system_rules = self._get_policy_system_rules_with_overrides(pid, label)
+            user_rules = self._get_policy_user_rules_with_overrides(
+                pid, label, template_user_rules_by_name, deep_compare=deep_compare_user
+            )
+            if system_rules or user_rules:
+                policy_overrides.append({
+                    "policy_id": pid,
+                    "policy_name": pol.get("policy_name"),
+                    "application_name": pol.get("application_name"),
+                    "system_rules": system_rules,
+                    "user_rules": user_rules,
+                })
+
+        total_sys = sum(len(p.get("system_rules") or []) for p in policy_overrides)
+        total_user = sum(len(p.get("user_rules") or []) for p in policy_overrides)
+        print(
+            f"Локальные переназначения в политиках безопасности: {len(policy_overrides)} политик, "
+            f"{total_sys} системных, {total_user} пользовательских правил"
+        )
+        return policy_overrides
     
-    def export_template(self, template_id, export_dir="templates_export", include_user_rules=True):
+    def export_template(
+        self, template_id, export_dir="templates_export", include_user_rules=True, policy_id=None
+    ):
         """Экспортирует шаблон с разделением на системные и пользовательские правила"""
         print(f"\nЭкспорт шаблона политики ID: {template_id}")
         
@@ -322,13 +530,20 @@ class PolicyTemplateManager(BaseManager):
                 if skipped > 0:
                     print(f"  Пропущено пользовательских правил (нигде не включены): {skipped}")
                 print(f"  К переносу пользовательских правил (вкл. в наборе/шаблоне/политике): {len(user_rules_data)}")
+
+        policy_overrides_data = self._get_policy_overrides_for_export(
+            template_id, policy_id=policy_id, template_user_rules_data=user_rules_data
+        )
         
-        if not system_rules_data and not user_rules_data:
-            print("⚠️ В шаблоне нет правил для экспорта")
+        if not system_rules_data and not user_rules_data and not policy_overrides_data:
+            print("⚠️ В шаблоне и политиках нет правил для экспорта")
             print("Экспортируется только информация о шаблоне")
         
         # Собираем все действия
-        all_rules_data = system_rules_data + user_rules_data
+        all_rules_data = list(system_rules_data) + list(user_rules_data)
+        for policy_entry in policy_overrides_data:
+            all_rules_data.extend(policy_entry.get("system_rules") or [])
+            all_rules_data.extend(policy_entry.get("user_rules") or [])
         action_ids = set()
         global_list_ids = set()
         
@@ -368,10 +583,18 @@ class PolicyTemplateManager(BaseManager):
                 
                 print(f"Найдено {len(related_global_lists)} глобальных списков")
         
+        policy_system_overrides_count = sum(
+            len(p.get("system_rules") or []) for p in policy_overrides_data
+        )
+        policy_user_overrides_count = sum(
+            len(p.get("user_rules") or []) for p in policy_overrides_data
+        )
+
         export_data = {
             "template": template_details,
-            "system_rules": system_rules_data,  # Измененные системные правила
-            "user_rules": user_rules_data,      # Пользовательские правила
+            "system_rules": system_rules_data,  # Измененные системные правила шаблона
+            "user_rules": user_rules_data,      # Пользовательские правила шаблона
+            "policy_overrides": policy_overrides_data,  # Локальные переназначения в политиках
             "related_actions": related_actions,
             "related_global_lists": related_global_lists,
             "export_info": {
@@ -383,6 +606,10 @@ class PolicyTemplateManager(BaseManager):
                 "has_user_rules": has_user_rules,
                 "system_rules_count": len(system_rules_data),
                 "user_rules_count": len(user_rules_data),
+                "policy_overrides_count": len(policy_overrides_data),
+                "policy_system_overrides_count": policy_system_overrides_count,
+                "policy_user_overrides_count": policy_user_overrides_count,
+                "scoped_policy_id": policy_id,
                 "actions_count": len(related_actions),
                 "global_lists_count": len(related_global_lists)
             }
@@ -405,8 +632,12 @@ class PolicyTemplateManager(BaseManager):
             print(f"✅ Шаблон успешно экспортирован в файл:")
             print(f"📁 Полный путь: {absolute_filepath}")
             print(f"📊 Экспортировано:")
-            print(f"  - Системных правил с изменениями: {len(system_rules_data)}")
-            print(f"  - Пользовательских правил: {len(user_rules_data)}")
+            print(f"  - Системных правил с изменениями (шаблон): {len(system_rules_data)}")
+            print(f"  - Пользовательских правил (шаблон): {len(user_rules_data)}")
+            print(
+                f"  - Локальных переназначений в политиках: {len(policy_overrides_data)} политик, "
+                f"{policy_system_overrides_count} системных, {policy_user_overrides_count} пользовательских"
+            )
             print(f"  - Связанных действий: {len(related_actions)}")
             print(f"  - Связанных глобальных списков: {len(related_global_lists)}")
             return absolute_filepath

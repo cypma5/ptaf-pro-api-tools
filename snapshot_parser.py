@@ -70,32 +70,117 @@ def get_template_name_for_application(snapshot: Dict[str, Any], app_policy_name:
     return None
 
 
+def _normalize_system_rule_override(rule: Dict[str, Any]) -> Dict[str, Any]:
+    """Поля переназначения системного правила: enabled, actions, variables (params в снапшоте)."""
+    override: Dict[str, Any] = {}
+    if rule.get("enabled") is not None:
+        override["enabled"] = rule["enabled"]
+    if rule.get("actions") is not None:
+        override["actions"] = rule["actions"]
+    variables = rule.get("variables")
+    if variables is None and rule.get("params") is not None:
+        variables = rule["params"]
+    if variables is not None:
+        override["variables"] = variables
+    return override
+
+
+def _merge_rule_overrides(
+    base: Dict[str, Dict[str, Any]], extra: Dict[str, Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Сливает оверрайды по имени правила; поля из extra перекрывают base."""
+    merged = {name: dict(data) for name, data in base.items()}
+    for name, fields in extra.items():
+        merged.setdefault(name, {})
+        merged[name].update(fields)
+    return merged
+
+
+def _merge_user_rules_by_name(
+    base: List[Dict[str, Any]], extra: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Сливает пользовательские правила по name; поля из extra перекрывают base."""
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for rule in base:
+        name = rule.get("name")
+        if name:
+            by_name[name] = dict(rule)
+    for rule in extra:
+        name = rule.get("name")
+        if not name:
+            continue
+        if name not in by_name:
+            by_name[name] = dict(rule)
+        else:
+            existing = by_name[name]
+            for key, value in rule.items():
+                if value is not None:
+                    if key == "configuration" and isinstance(value, dict):
+                        cfg = dict(existing.get("configuration") or {})
+                        cfg.update(value)
+                        existing["configuration"] = cfg
+                    else:
+                        existing[key] = value
+    return list(by_name.values())
+
+
 def get_system_rule_overrides_from_snapshot(
     snapshot: Dict[str, Any], template_name: str
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Возвращает только переназначения системных правил (отличные от дефолта).
-    Ключ — имя правила, значение — { enabled?, actions? } (только поля-оверрайды).
-    В снапшоте enabled/actions = null означают «как в шаблоне», не null — переназначение.
+    Переназначения системных правил в шаблоне политики (user_templates).
+    Ключ — имя правила; значение — enabled?, actions?, variables? (params в снапшоте).
+    null в снапшоте = «как в базовом шаблоне».
     """
     root = _root(snapshot)
     templates = root.get("user_templates") or []
     for t in templates:
         if t.get("name") != template_name:
             continue
-        overrides = {}
+        overrides: Dict[str, Dict[str, Any]] = {}
         for r in t.get("system_rules") or []:
             name = r.get("name")
             if not name:
                 continue
-            if r.get("enabled") is not None or r.get("actions") is not None:
-                overrides[name] = {}
-                if r.get("enabled") is not None:
-                    overrides[name]["enabled"] = r["enabled"]
-                if r.get("actions") is not None:
-                    overrides[name]["actions"] = r["actions"]
+            normalized = _normalize_system_rule_override(r)
+            if normalized:
+                overrides[name] = normalized
         return overrides
     return {}
+
+
+def get_policy_system_rule_overrides_from_snapshot(
+    snapshot: Dict[str, Any], policy_name: str
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Локальные переназначения системных правил на уровне политики приложения (policies[]).
+    Именно они соответствуют UI: application_policy / rules / rule / params.
+    """
+    root = _root(snapshot)
+    for policy in root.get("policies") or []:
+        if policy.get("name") != policy_name:
+            continue
+        overrides: Dict[str, Dict[str, Any]] = {}
+        for r in policy.get("system_rules") or []:
+            name = r.get("name")
+            if not name:
+                continue
+            normalized = _normalize_system_rule_override(r)
+            if normalized:
+                overrides[name] = normalized
+        return overrides
+    return {}
+
+
+def get_policy_user_rules_from_snapshot(
+    snapshot: Dict[str, Any], policy_name: str
+) -> List[Dict[str, Any]]:
+    """Локальные переназначения пользовательских правил на уровне политики приложения."""
+    root = _root(snapshot)
+    for policy in root.get("policies") or []:
+        if policy.get("name") == policy_name:
+            return list(policy.get("user_rules") or [])
+    return []
 
 
 def get_user_rules_from_snapshot(
@@ -119,8 +204,8 @@ def get_app_and_overrides_from_snapshot(
     По имени приложения возвращает данные для переноса из снапшота:
     - name, policy_name, hosts, locations, protection_mode
     - template_name (имя шаблона политики)
-    - system_rule_overrides: { rule_name: { enabled?, actions? } } — только переназначения
-    - user_rules: список пользовательских правил шаблона
+    - system_rule_overrides: шаблон + локальные оверрайды политики (enabled, actions, variables)
+    - user_rules: шаблон + локальные оверрайды политики
     Если приложение не найдено, возвращает None.
     """
     apps = get_applications_from_snapshot(snapshot)
@@ -139,8 +224,12 @@ def get_app_and_overrides_from_snapshot(
         app["user_rules"] = []
         return app
     app["template_name"] = template_name
-    app["system_rule_overrides"] = get_system_rule_overrides_from_snapshot(snapshot, template_name)
-    app["user_rules"] = get_user_rules_from_snapshot(snapshot, template_name)
+    template_overrides = get_system_rule_overrides_from_snapshot(snapshot, template_name)
+    policy_overrides = get_policy_system_rule_overrides_from_snapshot(snapshot, policy_name)
+    app["system_rule_overrides"] = _merge_rule_overrides(template_overrides, policy_overrides)
+    template_user_rules = get_user_rules_from_snapshot(snapshot, template_name)
+    policy_user_rules = get_policy_user_rules_from_snapshot(snapshot, policy_name)
+    app["user_rules"] = _merge_user_rules_by_name(template_user_rules, policy_user_rules)
     return app
 
 
