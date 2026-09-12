@@ -2,6 +2,11 @@
 import os
 import json
 from base_manager import BaseManager
+from version_utils import get_release_from_versions_response, version_gte
+
+# Расширенный снапшот GET config/snapshot?mode=sync доступен с PTAF 4.5.0
+SNAPSHOT_SYNC_MIN_VERSION = "4.5.0"
+
 
 class SnapshotManager(BaseManager):
     def __init__(self, api_client):
@@ -9,8 +14,8 @@ class SnapshotManager(BaseManager):
         from backup_manager import BackupManager
         self.backup_manager = BackupManager(api_client)
     
-    def get_tenant_snapshot(self, tenant_id=None):
-        """Получает конфигурацию тенанта"""
+    def get_tenant_snapshot(self, tenant_id=None, mode=None):
+        """Получает конфигурацию тенанта (mode='sync' — расширенный снапшот, PTAF 4.5.0+)."""
         if tenant_id and tenant_id != self.api_client.auth_manager.tenant_id:
             original_tenant_id = self.api_client.auth_manager.tenant_id
             self.api_client.auth_manager.tenant_id = tenant_id
@@ -19,9 +24,12 @@ class SnapshotManager(BaseManager):
                 self.api_client.auth_manager.tenant_id = original_tenant_id
                 return None
         
-        response = self.api_client.get_snapshot()
+        response = self.api_client.get_snapshot(mode=mode)
         if response and response.status_code == 200:
-            print("Успешно получена конфигурация тенанта")
+            if mode:
+                print(f"Успешно получена конфигурация тенанта (mode={mode})")
+            else:
+                print("Успешно получена конфигурация тенанта")
             return response.json()
         else:
             print(f"Ошибка при получении конфигурации")
@@ -32,7 +40,20 @@ class SnapshotManager(BaseManager):
         response = self.api_client.get_tenants()
         return self._parse_response_items(response)
     
-    def get_single_tenant_snapshot(self, tenant_id=None):
+    def _supports_snapshot_sync(self):
+        """True, если PTAF >= 4.5.0 (доступен GET config/snapshot?mode=sync)."""
+        release = None
+        try:
+            response = self.api_client.get_versions()
+            if response and response.status_code == 200:
+                data = response.json()
+                payload = data.get("data") if isinstance(data, dict) else None
+                release = get_release_from_versions_response(payload)
+        except Exception:
+            release = None
+        return version_gte(release, SNAPSHOT_SYNC_MIN_VERSION)
+
+    def get_single_tenant_snapshot(self, tenant_id=None, mode=None):
         """Получает конфигурацию выбранного тенанта"""
         if not tenant_id:
             # Используем TenantManager для выбора
@@ -43,10 +64,11 @@ class SnapshotManager(BaseManager):
                 return False
             tenant_id = tenant.get('id')
             tenant_name = tenant.get('name', 'Без названия')
-            print(f"\nПолучение конфигурации тенанта {tenant_name} (ID: {tenant_id})...")
+            mode_note = f" (mode={mode})" if mode else ""
+            print(f"\nПолучение конфигурации тенанта {tenant_name} (ID: {tenant_id}){mode_note}...")
         
         # Получаем конфигурацию
-        snapshot = self.get_tenant_snapshot(tenant_id)
+        snapshot = self.get_tenant_snapshot(tenant_id, mode=mode)
         if not snapshot:
             print("Не удалось получить конфигурацию")
             return False
@@ -67,7 +89,9 @@ class SnapshotManager(BaseManager):
         custom_actions = actions_manager.get_custom_actions()
         
         # Сохраняем в файлы
-        snapshot_filepath = self.backup_manager.save_snapshot_to_file(snapshot, tenant_id)
+        snapshot_filepath = self.backup_manager.save_snapshot_to_file(
+            snapshot, tenant_id, mode=mode
+        )
         backends_filepath = None
         roles_filepath = None
         actions_filepath = None
@@ -90,9 +114,10 @@ class SnapshotManager(BaseManager):
             print("Не удалось сохранить основные данные")
             return False
     
-    def get_all_tenants_snapshots(self):
+    def get_all_tenants_snapshots(self, mode=None):
         """Получает конфигурации со всех доступных тенантов"""
-        print("\nПолучение конфигураций со всех доступных тенантов...")
+        mode_note = f" (mode={mode})" if mode else ""
+        print(f"\nПолучение конфигураций со всех доступных тенантов{mode_note}...")
         
         # Сохраняем текущий тенант
         original_tenant_id = self.api_client.auth_manager.tenant_id
@@ -113,7 +138,7 @@ class SnapshotManager(BaseManager):
             print(f"\nОбработка тенанта: {tenant_name} (ID: {tenant_id})")
             
             # Получаем конфигурацию тенанта
-            snapshot = self.get_tenant_snapshot(tenant_id)
+            snapshot = self.get_tenant_snapshot(tenant_id, mode=mode)
             if snapshot:
                 # Получаем бекенды тенанта
                 from backends_manager import BackendsManager
@@ -131,7 +156,9 @@ class SnapshotManager(BaseManager):
                 custom_actions = actions_manager.get_custom_actions()
                 
                 # Сохраняем в файлы
-                snapshot_filepath = self.backup_manager.save_snapshot_to_file(snapshot, tenant_id)
+                snapshot_filepath = self.backup_manager.save_snapshot_to_file(
+                    snapshot, tenant_id, mode=mode
+                )
                 backends_success = False
                 roles_success = False
                 actions_success = False
@@ -227,14 +254,25 @@ class SnapshotManager(BaseManager):
     
     def manage_snapshots(self):
         """Управление получением конфигураций"""
+        sync_available = self._supports_snapshot_sync()
         while True:
             print("\nПолучение конфигураций тенантов:")
             print("1. Получить конфигурацию текущего тенанта")
             print("2. Получить конфигурацию выбранного тенанта")
             print("3. Получить конфигурации со всех тенантов")
-            print("4. Вернуться в главное меню")
+            next_num = 4
+            sync_choice = None
+            if sync_available:
+                print(
+                    f"{next_num}. Получить расширенную конфигурацию "
+                    f"(GET snapshot?mode=sync, PTAF {SNAPSHOT_SYNC_MIN_VERSION}+) [экспериментально]"
+                )
+                sync_choice = str(next_num)
+                next_num += 1
+            print(f"{next_num}. Вернуться в главное меню")
+            back_choice = str(next_num)
             
-            choice = input("\nВыберите действие (1-4): ")
+            choice = input(f"\nВыберите действие (1-{next_num}): ")
             
             if choice == '1':
                 if not self.api_client.auth_manager.tenant_id:
@@ -247,8 +285,34 @@ class SnapshotManager(BaseManager):
             
             elif choice == '3':
                 self.get_all_tenants_snapshots()
+
+            elif sync_choice and choice == sync_choice:
+                print(
+                    "\nРежим mode=sync: расширенный снапшот (PTAF 4.5.0+). "
+                    "Парсинг/визуализация по этому формату будет доработана позже."
+                )
+                print("1. Текущий тенант")
+                print("2. Выбранный тенант")
+                print("3. Все тенанты")
+                print("4. Отмена")
+                sync_scope = input("\nВыберите область (1-4): ").strip()
+                if sync_scope == '1':
+                    if not self.api_client.auth_manager.tenant_id:
+                        print("Сначала выберите тенант")
+                        continue
+                    self.get_single_tenant_snapshot(
+                        self.api_client.auth_manager.tenant_id, mode="sync"
+                    )
+                elif sync_scope == '2':
+                    self.get_single_tenant_snapshot(mode="sync")
+                elif sync_scope == '3':
+                    self.get_all_tenants_snapshots(mode="sync")
+                elif sync_scope == '4':
+                    continue
+                else:
+                    print("Некорректный выбор. Попробуйте снова.")
             
-            elif choice == '4':
+            elif choice == back_choice:
                 return
             
             else:
