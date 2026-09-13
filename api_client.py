@@ -305,15 +305,57 @@ class APIClient:
             self._make_api_call, "PATCH", "config/traffic_settings", json=settings_data,
             operation_name="Обновление настроек трафика"
         )
+
+    # ==================== TRAFFIC PROFILES / VIPS ====================
+    def get_traffic_profiles(self):
+        """Получить список traffic profiles"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", "config/traffic_profiles",
+            operation_name="Получение traffic profiles"
+        )
+
+    def get_traffic_profile_details(self, profile_id):
+        """Получить детали traffic profile"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/traffic_profiles/{profile_id}",
+            operation_name=f"Получение traffic profile {profile_id}"
+        )
+
+    def get_vips(self):
+        """Получить список VIP (входные IP)"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", "config/vips",
+            operation_name="Получение VIP"
+        )
+
+    def get_vip_details(self, vip_id):
+        """Получить детали VIP"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/vips/{vip_id}",
+            operation_name=f"Получение VIP {vip_id}"
+        )
     
     # ==================== СНАПШОТЫ ====================
     # GET  /api/ptaf/v4/config/snapshot — получение снапшота конфигурации тенанта
+    # GET  /api/ptaf/v4/config/snapshot?mode=sync — расширенный снапшот (PTAF 4.5.0+)
     # POST /api/ptaf/v4/config/snapshot — восстановление из снапшота
-    def get_snapshot(self):
-        """Получить снапшот конфигурации (GET .../api/ptaf/v4/config/snapshot)."""
+    def get_snapshot(self, mode=None):
+        """
+        Получить снапшот конфигурации (GET .../config/snapshot).
+
+        mode:
+          None / не передан — обычный снапшот (как раньше);
+          \"sync\" — расширенная конфигурация (доступно с PTAF 4.5.0+).
+        """
+        kwargs = {}
+        op_name = "Получение снапшота"
+        if mode:
+            kwargs["params"] = {"mode": mode}
+            op_name = f"Получение снапшота (mode={mode})"
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", "config/snapshot",
-            operation_name="Получение снапшота"
+            operation_name=op_name,
+            **kwargs,
         )
     
     def restore_snapshot(self, snapshot_data):

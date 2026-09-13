@@ -16,6 +16,7 @@ from roles_manager import RolesManager
 from backends_manager import BackendsManager
 from backup_manager import BackupManager
 from global_lists_manager import GlobalListsManager
+from traffic_flow_visualizer import TrafficFlowVisualizer
 from version_utils import (
     get_release_from_versions_response,
     version_gte,
@@ -44,6 +45,7 @@ class PTAFClient:
         self.policies_manager = PoliciesManager(self.api_client)
         self.actions_manager = ActionsManager(self.api_client)
         self.global_lists_manager = GlobalListsManager(self.api_client)
+        self.traffic_flow_visualizer = TrafficFlowVisualizer(self.api_client)
         self.snapshot_manager = SnapshotManager(self.api_client)
         self.roles_manager = RolesManager(self.api_client)
         self.backends_manager = BackendsManager(self.api_client)
@@ -128,6 +130,10 @@ class PTAFClient:
     def manage_global_lists(self):
         """Управление глобальных списков"""
         return self.global_lists_manager.manage_global_lists()
+
+    def manage_traffic_flow_diagram(self):
+        """Визуализация прохождения трафика (Mermaid)"""
+        return self.traffic_flow_visualizer.manage_traffic_flow_diagram()
 
     def fetch_ptaf_release(self):
         """Загружает версию PTAF с сервера (GET about/versions) и сохраняет релиз в self.ptaf_release (например 4.3.0)."""
@@ -251,6 +257,7 @@ def main():
             {"label": "Копирование объектов между тенантами", "min_version": None, "need_tenant": False, "key": "transfer"},
             {"label": "Работа с тенантами", "min_version": None, "need_tenant": False, "key": "tenants"},
             {"label": "Управление глобальных списков", "min_version": "4.2.2", "need_tenant": False, "key": "global_lists"},
+            {"label": "Визуализация прохождения трафика (Mermaid)", "min_version": None, "need_tenant": True, "key": "traffic_flow"},
             {"label": "Выход", "min_version": None, "need_tenant": False, "key": "exit"},
         ]
 
@@ -270,6 +277,7 @@ def main():
                 "transfer": client.manage_tenant_transfer,
                 "tenants": client.manage_tenants,
                 "global_lists": client.manage_global_lists,
+                "traffic_flow": client.manage_traffic_flow_diagram,
             }
             fn = handlers.get(item["key"])
             if fn:

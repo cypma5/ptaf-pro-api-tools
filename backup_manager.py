@@ -17,15 +17,16 @@ class BackupManager(BaseManager):
         self.roles_manager = RolesManager(api_client)
         self.actions_manager = ActionsManager(api_client)
 
-    def save_snapshot_to_file(self, snapshot, tenant_id, base_dir="snapshot"):
-        """Сохраняет конфигурацию в файл"""
+    def save_snapshot_to_file(self, snapshot, tenant_id, base_dir="snapshot", mode=None):
+        """Сохраняет конфигурацию в файл (mode='sync' → суффикс -snapshot-sync.json)."""
         # Создаем директорию для тенанта
         tenant_dir = os.path.join(base_dir, tenant_id)
         os.makedirs(tenant_dir, exist_ok=True)
         
         # Формируем имя файла с датой и временем
         current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        filename = f"{current_time}-snapshot.json"
+        suffix = f"snapshot-{mode}" if mode else "snapshot"
+        filename = f"{current_time}-{suffix}.json"
         filepath = os.path.join(tenant_dir, filename)
         
         # Получаем абсолютный путь
