@@ -176,17 +176,29 @@ class TrafficFlowVisualizer(BaseManager):
             else:
                 profiles_full.append(p)
 
+        # Цвета рёбер: профили, привязанные к приложениям с >1 профилем
+        profile_edge_color: Dict[str, str] = {}
+        for _app_id, pids in app_profiles.items():
+            if len(pids) <= 1:
+                continue
+            for i, pid in enumerate(sorted(pids)):
+                profile_edge_color.setdefault(
+                    pid, self.PROFILE_EDGE_COLORS[i % len(self.PROFILE_EDGE_COLORS)]
+                )
+
         vip_nodes: Dict[str, Dict[str, str]] = {}
         gateway_nodes: Dict[str, Dict[str, str]] = {}
         vip_gateways: Dict[str, List[str]] = {}
         port_nodes: Dict[str, Dict[str, str]] = {}
         app_nodes: Dict[str, Dict[str, str]] = {}
         backend_nodes: Dict[str, Dict[str, str]] = {}
-        edges: Set[Tuple[str, str]] = set()
+        edges: List[Tuple[str, str, Optional[str]]] = []
+        edge_seen: Set[Tuple[str, str, str]] = set()
         sankey_links: Set[Tuple[str, str]] = set()
 
         for profile in profiles_full:
             profile_id = str(profile.get("id") or "")
+            edge_color = profile_edge_color.get(profile_id)
             balancer = profile.get("balancer") or {}
             listen_port = balancer.get("listen_port")
             protocol = (balancer.get("protocol_options") or {}).get("type") or ""
@@ -228,17 +240,19 @@ class TrafficFlowVisualizer(BaseManager):
                         "style_key": str(app.get("protection_mode") or ""),
                     })
 
-            # Listen port VIP уникален для каждого Listen VIP
-            # VIP port -> VIP IP; Gateway -> VIP IP (не к порту)
+            # Gateway -> VIP address -> VIP port -> App
+            vip_port_ids: List[str] = []
             for vip_node_id in vip_node_ids:
                 vip_label = (vip_nodes.get(vip_node_id) or {}).get("label") or vip_node_id
                 vip_port_id, vip_port_label = self._vip_port_node(
                     listen_port, protocol, unique_key=vip_node_id, vip_label=vip_label
                 )
                 port_nodes[vip_port_id] = {"id": vip_port_id, "label": vip_port_label}
-                edges.add((vip_port_id, vip_node_id))
+                vip_port_ids.append(vip_port_id)
+                self._add_edge(edges, edge_seen, vip_node_id, vip_port_id, edge_color)
                 for gw_id in vip_gateways.get(vip_node_id) or []:
-                    edges.add((gw_id, vip_node_id))
+                    # Gateway относится к VIP-адресу, не к порту
+                    self._add_edge(edges, edge_seen, gw_id, vip_node_id, None)
 
             for target in targets:
                 app_node_id = target["app_node_id"]
@@ -248,18 +262,20 @@ class TrafficFlowVisualizer(BaseManager):
                     "protection_mode": target.get("protection_mode") or "",
                     "style_key": target.get("style_key") or "",
                 }
-                for vip_node_id in vip_node_ids:
-                    edges.add((vip_node_id, app_node_id))
+                for vip_port_id in vip_port_ids:
+                    self._add_edge(edges, edge_seen, vip_port_id, app_node_id, edge_color)
                 self._link_profile_backends(
                     profile,
                     backend_by_id,
                     backend_nodes,
                     port_nodes,
                     edges,
+                    edge_seen,
                     sankey_links,
                     from_app_id=app_node_id,
                     sankey_app=target["sankey_app"],
                     locations=target["locations"],
+                    edge_color=edge_color,
                 )
 
         # Apps without any traffic profile
@@ -274,13 +290,9 @@ class TrafficFlowVisualizer(BaseManager):
                 "protection_mode": str(app.get("protection_mode") or ""),
                 "style_key": "ORPHAN_APP",
             }
-            orphan_vip = "VIP_unassigned"
-            vip_nodes[orphan_vip] = {"id": orphan_vip, "label": "no VIP"}
             orphan_port = "VP_none"
             port_nodes[orphan_port] = {"id": orphan_port, "label": "no traffic profile"}
-            # Listen port VIP -> Listen VIP -> App
-            edges.add((orphan_port, orphan_vip))
-            edges.add((orphan_vip, app_node_id))
+            self._add_edge(edges, edge_seen, orphan_port, app_node_id, None)
 
         return {
             "vip_nodes": vip_nodes,
@@ -288,7 +300,7 @@ class TrafficFlowVisualizer(BaseManager):
             "port_nodes": port_nodes,
             "app_nodes": app_nodes,
             "backend_nodes": backend_nodes,
-            "edges": sorted(edges),
+            "edges": edges,
             "sankey_links": sorted(sankey_links),
             "stats": {
                 "listens": len(vip_nodes),
@@ -445,11 +457,13 @@ class TrafficFlowVisualizer(BaseManager):
         backend_by_id: Dict[str, Dict[str, Any]],
         backend_nodes: Dict[str, Dict[str, str]],
         port_nodes: Dict[str, Dict[str, str]],
-        edges: Set[Tuple[str, str]],
+        edges: List[Tuple[str, str, Optional[str]]],
+        edge_seen: Set[Tuple[str, str, str]],
         sankey_links: Set[Tuple[str, str]],
         from_app_id: str,
         sankey_app: str,
         locations: List[str],
+        edge_color: Optional[str] = None,
     ) -> None:
         """Flowchart: App → backend port → backend IP.
         Sankey: App → Location → backend port → backend IP.
@@ -474,10 +488,10 @@ class TrafficFlowVisualizer(BaseManager):
                 backend_label=be_address,
             )
             port_nodes[bp_id] = {"id": bp_id, "label": bp_label}
-            edges.add((from_app_id, bp_id))
+            self._add_edge(edges, edge_seen, from_app_id, bp_id, edge_color)
 
             backend_nodes[node_id] = {"id": node_id, "label": be_label}
-            edges.add((bp_id, node_id))
+            self._add_edge(edges, edge_seen, bp_id, node_id, edge_color)
 
             # Короткие уникальные подписи для sankey (длинные ломают layout)
             port_part = str(backend_port) if backend_port is not None else "?"
@@ -488,6 +502,41 @@ class TrafficFlowVisualizer(BaseManager):
                 sankey_links.add((sankey_app, loc_label))
                 sankey_links.add((loc_label, sankey_bp))
                 sankey_links.add((sankey_bp, sankey_be))
+
+    @staticmethod
+    def _add_edge(
+        edges: List[Tuple[str, str, Optional[str]]],
+        edge_seen: Set[Tuple[str, str, str]],
+        src: str,
+        dst: str,
+        color: Optional[str] = None,
+    ) -> None:
+        # Одно ребро src→dst; если позже появляется цвет — обновляем
+        for i, (s, d, c) in enumerate(edges):
+            if s == src and d == dst:
+                if color and not c:
+                    old_key = (src, dst, c or "")
+                    edge_seen.discard(old_key)
+                    edges[i] = (src, dst, color)
+                    edge_seen.add((src, dst, color))
+                return
+        key = (src, dst, color or "")
+        if key in edge_seen:
+            return
+        edge_seen.add(key)
+        edges.append((src, dst, color))
+
+    # Цвета рёбер для приложений с несколькими traffic profiles
+    PROFILE_EDGE_COLORS = [
+        "#e74c3c",
+        "#3498db",
+        "#8e44ad",
+        "#16a085",
+        "#d35400",
+        "#2c3e50",
+        "#c0392b",
+        "#2980b9",
+    ]
 
     @staticmethod
     def _vip_address(vip: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -527,15 +576,18 @@ class TrafficFlowVisualizer(BaseManager):
         backend_id: Any,
         profile_backend: Dict[str, Any],
     ) -> Tuple[str, str]:
-        """Узел только с IP/hostname защищаемого сервера (порт — узел BP_*)."""
+        """Узел IP/hostname бекенда; одинаковые address объединяются в один узел."""
         bid = str(backend_id)
         if backend:
-            label = str(backend.get("address") or "?")
+            address = str(backend.get("address") or "?")
+            label = address
             if backend.get("enabled") is False:
                 label += " disabled"
+            node_id = f"B_{self._safe_id(address)}"
         else:
             label = f"backend {bid[:8]}"
-        return f"B_{self._safe_id(bid)}", label
+            node_id = f"B_{self._safe_id(bid)}"
+        return node_id, label
 
     @staticmethod
     def _safe_id(value: str) -> str:
@@ -564,8 +616,13 @@ class TrafficFlowVisualizer(BaseManager):
     }
 
     def build_flowchart_mermaid(self, graph: Dict[str, Any]) -> str:
-        # VIP port -> VIP IP -> App -> ...; Gateway -> VIP IP
-        lines = ["flowchart LR"]
+        # Gateway -> VIP address -> VIP port -> App -> backend port -> backend IP
+        # ELK лучше стыкует рёбра слева→справа (вход в начало фигуры, выход с конца).
+        lines = [
+            '%%{init: {"flowchart": {"defaultRenderer": "elk", "htmlLabels": true, '
+            '"curve": "linear", "nodeSpacing": 40, "rankSpacing": 70}} }%%',
+            "flowchart LR",
+        ]
         for _key, (class_name, style) in self.APP_NODE_CLASSES.items():
             lines.append(f"  classDef {class_name} {style}")
         lines.append("  classDef gateway fill:#5dade2,stroke:#1a5276,color:#000")
@@ -579,23 +636,53 @@ class TrafficFlowVisualizer(BaseManager):
         for node in (graph.get("gateway_nodes") or {}).values():
             lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
             lines.append(f'  class {node["id"]} gateway')
-        for node in vip_ports.values():
-            lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
         for node in (graph.get("vip_nodes") or {}).values():
             lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
-        for node in (graph.get("app_nodes") or {}).values():
-            lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
-            style_key = node.get("style_key") or node.get("protection_mode") or ""
-            class_info = self.APP_NODE_CLASSES.get(style_key)
-            if class_info:
-                lines.append(f'  class {node["id"]} {class_info[0]}')
-        for node in backend_ports.values():
-            lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
-        for node in (graph.get("backend_nodes") or {}).values():
-            lines.append(f'  {node["id"]}["{self._escape_label(node["label"])}"]')
-        for src, dst in graph["edges"]:
+
+        vip_port_list = list(vip_ports.values())
+        if vip_port_list:
+            lines.append('  subgraph sg_vip_ports ["VIP PORT"]')
+            lines.append("    direction LR")
+            for node in vip_port_list:
+                lines.append(f'    {node["id"]}["{self._escape_label(node["label"])}"]')
+            lines.append("  end")
+
+        app_nodes = list((graph.get("app_nodes") or {}).values())
+        if app_nodes:
+            lines.append('  subgraph sg_apps ["Web applications"]')
+            lines.append("    direction LR")
+            for node in app_nodes:
+                lines.append(f'    {node["id"]}["{self._escape_label(node["label"])}"]')
+                style_key = node.get("style_key") or node.get("protection_mode") or ""
+                class_info = self.APP_NODE_CLASSES.get(style_key)
+                if class_info:
+                    lines.append(f'    class {node["id"]} {class_info[0]}')
+            lines.append("  end")
+
+        be_ports = list(backend_ports.values())
+        be_ips = list((graph.get("backend_nodes") or {}).values())
+        if be_ports or be_ips:
+            lines.append('  subgraph sg_backends ["Backend PORT:IP"]')
+            lines.append("    direction LR")
+            for node in be_ports:
+                lines.append(f'    {node["id"]}["{self._escape_label(node["label"])}"]')
+            for node in be_ips:
+                lines.append(f'    {node["id"]}["{self._escape_label(node["label"])}"]')
+            lines.append("  end")
+
+        edge_list = graph.get("edges") or []
+        for item in edge_list:
+            if len(item) == 3:
+                src, dst, _color = item
+            else:
+                src, dst = item[0], item[1]
             lines.append(f"  {src} --> {dst}")
-        if len(lines) == 2 + len(self.APP_NODE_CLASSES):
+        for i, item in enumerate(edge_list):
+            color = item[2] if len(item) == 3 else None
+            if color:
+                lines.append(f"  linkStyle {i} stroke:{color},stroke-width:3px")
+
+        if len(edge_list) == 0 and len(lines) == 3 + len(self.APP_NODE_CLASSES):
             lines.append('  empty["No traffic flow data"]')
         return "\n".join(lines)
 
