@@ -5,10 +5,17 @@
 
 from __future__ import annotations
 
+import copy
 import os
+import re
 import shutil
 import tempfile
 from typing import Any, Dict, List, Optional
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _select_tenant(tenant_manager, prompt: str) -> Optional[Dict[str, Any]]:
@@ -60,6 +67,170 @@ def _select_application(applications: List[Dict[str, Any]]) -> Optional[Dict[str
         print("Некорректный номер, попробуйте снова.")
 
 
+def _is_uuid(value: Any) -> bool:
+    return isinstance(value, str) and bool(_UUID_RE.match(value))
+
+
+def _collect_source_rules_for_reference_mapping(
+    source_rule_details_by_name: Dict[str, List[Dict[str, Any]]],
+    source_user_rule_details_by_name: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    rules: List[Dict[str, Any]] = []
+    for rule_list in source_rule_details_by_name.values():
+        rules.extend(rule_list)
+    for rule_list in source_user_rule_details_by_name.values():
+        rules.extend(rule_list)
+    return rules
+
+
+def _build_global_list_mapping_for_policy_copy(
+    api_client,
+    rules_data: List[Dict[str, Any]],
+    source_tenant_id: str,
+    target_tenant_id: str,
+) -> Dict[str, str]:
+    """
+    Маппинг ссылок на глобальные списки (UUID или имя из снапшота) -> UUID в целевом тенанте.
+    """
+    from global_lists_manager import GlobalListsManager
+    from policy_template_manager import PolicyTemplateManager
+
+    template_mgr = PolicyTemplateManager(api_client)
+    refs: set[str] = set()
+    for rule_data in rules_data:
+        refs.update(str(ref) for ref in template_mgr._collect_rule_global_list_ids(rule_data))
+    if not refs:
+        return {}
+
+    original_tenant_id = api_client.auth_manager.tenant_id
+    source_by_id: Dict[str, Dict[str, Any]] = {}
+    source_by_name: Dict[str, Dict[str, Any]] = {}
+
+    try:
+        if source_tenant_id:
+            api_client.auth_manager.tenant_id = source_tenant_id
+            if api_client.auth_manager.update_jwt_with_tenant(api_client.make_request):
+                source_lists = GlobalListsManager(api_client).get_global_lists() or []
+                for lst in source_lists:
+                    list_id = lst.get("id")
+                    list_name = lst.get("name")
+                    if list_id:
+                        source_by_id[str(list_id)] = lst
+                    if list_name:
+                        source_by_name[list_name] = lst
+
+        api_client.auth_manager.tenant_id = target_tenant_id
+        if not api_client.auth_manager.update_jwt_with_tenant(api_client.make_request):
+            print("⚠️ Не удалось переключиться на целевой тенант для маппинга глобальных списков")
+            return {}
+
+        lists_manager = GlobalListsManager(api_client)
+        mapping: Dict[str, str] = {}
+        print(f"\nМаппинг глобальных списков для переноса правил политики ({len(refs)} ссылок)...")
+
+        for ref in sorted(refs):
+            list_name = ref
+            list_type = "DYNAMIC"
+            if _is_uuid(ref):
+                source_list = source_by_id.get(ref)
+                if source_list:
+                    list_name = source_list.get("name") or ref
+                    list_type = source_list.get("type") or list_type
+                else:
+                    target_by_id = next(
+                        (
+                            lst
+                            for lst in (lists_manager.get_global_lists() or [])
+                            if str(lst.get("id")) == ref
+                        ),
+                        None,
+                    )
+                    if target_by_id:
+                        mapping[ref] = target_by_id.get("id")
+                        print(f"  {ref} -> {mapping[ref]} (тот же UUID в целевом тенанте)")
+                        continue
+                    print(f"  ⚠️ Список с ID {ref} не найден в исходном тенанте")
+                    continue
+            else:
+                source_list = source_by_name.get(ref)
+                if source_list:
+                    list_type = source_list.get("type") or list_type
+
+            target_list = lists_manager.find_list_by_name_and_type_including_system(list_name, list_type)
+            if not target_list and list_type == "DYNAMIC":
+                target_list = lists_manager.find_list_by_name_and_type_including_system(list_name, "STATIC")
+            if target_list and target_list.get("id"):
+                mapping[ref] = target_list["id"]
+                print(f"  '{list_name}' -> {target_list['id']}")
+            else:
+                print(f"  ⚠️ Глобальный список '{list_name}' ({list_type}) не найден в целевом тенанте")
+
+        return mapping
+    finally:
+        api_client.auth_manager.tenant_id = original_tenant_id
+        if original_tenant_id:
+            api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
+
+
+def _apply_global_list_mapping_to_rule_details(
+    details: Dict[str, Any],
+    global_list_mapping: Dict[str, str],
+    template_mgr,
+) -> Dict[str, Any]:
+    if not global_list_mapping:
+        return details
+    mapped = copy.deepcopy(details)
+    template_mgr._apply_reference_mappings_to_rule_data(mapped, {}, global_list_mapping)
+    return mapped
+
+
+def _build_system_rule_policy_update(
+    source_details: Dict[str, Any], target_details: Dict[str, Any]
+) -> Dict[str, Any]:
+    """PATCH config/policies/{id}/rules/{rule_id}: enabled, actions, variables (params в UI)."""
+    update_data: Dict[str, Any] = {}
+    if "enabled" in source_details and source_details.get("enabled") != target_details.get("enabled"):
+        update_data["enabled"] = source_details.get("enabled")
+    if "actions" in source_details and source_details.get("actions") != target_details.get("actions"):
+        update_data["actions"] = source_details.get("actions", [])
+    source_vars = source_details.get("variables")
+    if source_vars is not None and source_vars != target_details.get("variables"):
+        update_data["variables"] = source_vars
+    return update_data
+
+
+def _build_user_rule_policy_update(
+    source_details: Dict[str, Any], target_details: Dict[str, Any]
+) -> Dict[str, Any]:
+    """PATCH config/policies/{id}/user_rules/{rule_id}: enabled, variables, configuration."""
+    update_data: Dict[str, Any] = {}
+    if "enabled" in source_details and source_details.get("enabled") != target_details.get("enabled"):
+        update_data["enabled"] = source_details.get("enabled")
+    source_vars = source_details.get("variables")
+    if source_vars is not None and source_vars != target_details.get("variables"):
+        update_data["variables"] = source_vars
+
+    source_cfg = source_details.get("configuration") or {}
+    target_cfg = target_details.get("configuration") or {}
+    cfg_update: Dict[str, Any] = {}
+    if source_cfg.get("actions") is not None and source_cfg.get("actions") != target_cfg.get("actions"):
+        cfg_update["actions"] = source_cfg.get("actions", [])
+    if source_cfg.get("parameters") is not None and source_cfg.get("parameters") != target_cfg.get("parameters"):
+        cfg_update["parameters"] = source_cfg.get("parameters", [])
+    if cfg_update:
+        update_data["configuration"] = cfg_update
+
+    # Обратная совместимость: actions на верхнем уровне снапшота
+    if (
+        not cfg_update.get("actions")
+        and "actions" in source_details
+        and source_details.get("actions") != target_details.get("actions")
+    ):
+        update_data["actions"] = source_details.get("actions", [])
+
+    return update_data
+
+
 def _compare_app_snapshots(
     source_snapshot: Dict[str, Any],
     target_snapshot: Dict[str, Any],
@@ -102,7 +273,16 @@ def _compare_app_snapshots(
         if t_data is None:
             diffs.append(f"  Системное правило '{name}': есть в источнике (enabled={s_data.get('enabled')}, actions=...), в целевом — нет оверрайда")
         elif s_data != t_data:
-            diffs.append(f"  Системное правило '{name}': отличается (источник: enabled={s_data.get('enabled')}, actions={s_data.get('actions')}; целевой: enabled={t_data.get('enabled')}, actions={t_data.get('actions')})")
+            s_vars = s_data.get("variables")
+            t_vars = t_data.get("variables")
+            vars_note = ""
+            if s_vars != t_vars:
+                vars_note = f", variables отличаются"
+            diffs.append(
+                f"  Системное правило '{name}': отличается "
+                f"(источник: enabled={s_data.get('enabled')}, actions={s_data.get('actions')}{vars_note}; "
+                f"целевой: enabled={t_data.get('enabled')}, actions={t_data.get('actions')})"
+            )
     for name in tgt_sys:
         if name not in src_sys:
             diffs.append(f"  Системное правило '{name}': оверрайд только в целевом (в источнике нет)")
@@ -121,6 +301,12 @@ def _compare_app_snapshots(
             t_actions = t_r.get("actions") or t_r.get("configuration", {}).get("actions") or []
             if s_actions != t_actions:
                 diffs.append(f"  Пользовательское правило '{name}': действия отличаются (источник: {len(s_actions)}, целевой: {len(t_actions)})")
+            s_params = (s_r.get("configuration") or {}).get("parameters")
+            t_params = (t_r.get("configuration") or {}).get("parameters")
+            if s_params is not None and s_params != t_params:
+                diffs.append(f"  Пользовательское правило '{name}': parameters отличаются")
+            if s_r.get("variables") != t_r.get("variables"):
+                diffs.append(f"  Пользовательское правило '{name}': variables отличаются")
     for name in tgt_users:
         if name not in src_users:
             diffs.append(f"  Пользовательское правило '{name}': только в целевом (в источнике нет)")
@@ -291,6 +477,21 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
             api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
         return
 
+    source_apps_resp = api_client.get_applications()
+    source_apps_list = api_client._parse_response_items(source_apps_resp) or []
+    for app in source_apps_list:
+        if app.get("name") == app_name:
+            source_app = app
+            source_policy_id = app.get("policy_id")
+            break
+    if source_policy_id:
+        print(f"Политика безопасности исходного приложения: policy_id={source_policy_id}")
+    else:
+        print(
+            f"⚠️ Не удалось определить policy_id исходного приложения '{app_name}' — "
+            "экспорт шаблона будет без локальных переназначений политики."
+        )
+
     print(f"\nВыбрано веб приложение '{app_name}' в тенанте '{source_tenant_name}'.")
 
     if not source_template_id or not source_template_name:
@@ -308,7 +509,10 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
         _template_mgr = PolicyTemplateManager(api_client)
         temp_export_dir = tempfile.mkdtemp()
         template_export_file = _template_mgr.export_template(
-            source_template_id, temp_export_dir, include_user_rules=True
+            source_template_id,
+            temp_export_dir,
+            include_user_rules=True,
+            policy_id=source_policy_id,
         )
     except Exception as e:
         print(f"Предэкспорт шаблона не удался (будет использовано переключение на исходный тенант при копировании): {e}")
@@ -557,7 +761,17 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
         api_client.auth_manager.update_jwt_with_tenant(api_client.make_request)
         return
 
-    # 8. Переносим включённость и actions системных правил по именам
+    from policy_template_manager import PolicyTemplateManager
+
+    _template_mgr = PolicyTemplateManager(api_client)
+    rules_for_mapping = _collect_source_rules_for_reference_mapping(
+        source_rule_details_by_name, source_user_rule_details_by_name
+    )
+    global_list_mapping = _build_global_list_mapping_for_policy_copy(
+        api_client, rules_for_mapping, source_tenant_id, target_tenant_id
+    )
+
+    # 8. Переносим локальные переназначения системных правил политики (enabled, actions, variables/params)
     target_system_rules_resp = api_client.get_policy_system_rules(target_policy_id)
     target_system_rules = api_client._parse_response_items(target_system_rules_resp) or []
 
@@ -576,6 +790,9 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
             continue
 
         source_details = source_rules_with_name[0]
+        source_details = _apply_global_list_mapping_to_rule_details(
+            source_details, global_list_mapping, _template_mgr
+        )
 
         target_details_resp = api_client.get_policy_system_rule_details(target_policy_id, rule_id)
         if not target_details_resp or target_details_resp.status_code != 200:
@@ -584,15 +801,7 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
             continue
         target_details = target_details_resp.json()
 
-        update_data: Dict[str, Any] = {}
-
-        # enabled
-        if "enabled" in source_details and source_details.get("enabled") != target_details.get("enabled"):
-            update_data["enabled"] = source_details.get("enabled")
-
-        # actions
-        if "actions" in source_details and source_details.get("actions") != target_details.get("actions"):
-            update_data["actions"] = source_details.get("actions", [])
+        update_data = _build_system_rule_policy_update(source_details, target_details)
 
         if not update_data:
             sys_no_change += 1
@@ -600,7 +809,8 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
 
         update_resp = api_client.update_policy_system_rule(target_policy_id, rule_id, update_data)
         if update_resp and update_resp.status_code in (200, 204):
-            print(f"Перенесены изменения для правила '{rule_name}' (системное).")
+            fields = ", ".join(update_data.keys())
+            print(f"Перенесены изменения для правила '{rule_name}' (системное): {fields}.")
             updated_count += 1
         else:
             _print_http_error(update_resp, f"Ошибка при обновлении правила '{rule_name}' в целевом тенанте")
@@ -612,7 +822,7 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
         f"обновлено {updated_count}, нет в источнике {sys_no_source}, без изменений {sys_no_change}, ошибок {error_count}."
     )
 
-    # 9. Перенос пользовательских правил политики (enabled, actions) по именам
+    # 9. Перенос локальных переназначений пользовательских правил политики
     target_user_rules_resp = api_client.get_policy_user_rules(target_policy_id)
     target_user_rules = api_client._parse_response_items(target_user_rules_resp) or []
     user_updated = 0
@@ -627,23 +837,23 @@ def run_copy_web_app_flow(api_client, snapshot_manager) -> None:
             user_no_source += 1
             continue
         source_details = source_list[0]
+        source_details = _apply_global_list_mapping_to_rule_details(
+            source_details, global_list_mapping, _template_mgr
+        )
         target_details_resp = api_client.get_policy_user_rule_details(target_policy_id, rule_id)
         if not target_details_resp or target_details_resp.status_code != 200:
             _print_http_error(target_details_resp, f"Детали пользовательского правила '{rule_name}'")
             user_errors += 1
             continue
         target_details = target_details_resp.json()
-        update_data = {}
-        if "enabled" in source_details and source_details.get("enabled") != target_details.get("enabled"):
-            update_data["enabled"] = source_details.get("enabled")
-        if "actions" in source_details and source_details.get("actions") != target_details.get("actions"):
-            update_data["actions"] = source_details.get("actions", [])
+        update_data = _build_user_rule_policy_update(source_details, target_details)
         if not update_data:
             user_no_change += 1
             continue
         patch_resp = api_client.update_policy_user_rule(target_policy_id, rule_id, update_data)
         if patch_resp and patch_resp.status_code in (200, 204):
-            print(f"Перенесены изменения для пользовательского правила '{rule_name}'.")
+            fields = ", ".join(update_data.keys())
+            print(f"Перенесены изменения для пользовательского правила '{rule_name}': {fields}.")
             user_updated += 1
         else:
             _print_http_error(patch_resp, f"Ошибка обновления пользовательского правила '{rule_name}'")

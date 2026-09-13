@@ -76,10 +76,27 @@ class PoliciesManager:
         update_data = {"actions": new_actions}
         return self.api_client.update_policy_system_rule(policy_id, rule_id, update_data)
     
-    def update_policy_user_rule_actions_only(self, policy_id, rule_id, new_actions):
-        """Обновляет только действия в пользовательском правиле политики"""
-        update_data = {"actions": new_actions}
+    def update_policy_user_rule_actions_only(self, policy_id, rule_id, new_actions, rule_details=None):
+        """Обновляет действия в пользовательском правиле политики (configuration.actions)."""
+        parameters = []
+        if rule_details and isinstance(rule_details.get('configuration'), dict):
+            parameters = rule_details['configuration'].get('parameters') or []
+        update_data = {
+            'configuration': {
+                'actions': new_actions,
+                'parameters': parameters,
+            }
+        }
         return self.api_client.update_policy_user_rule(policy_id, rule_id, update_data)
+    
+    def _extract_rule_actions(self, rule_details, is_user_rule=False):
+        if not isinstance(rule_details, dict):
+            return []
+        if is_user_rule:
+            configuration = rule_details.get('configuration')
+            if isinstance(configuration, dict) and configuration.get('actions') is not None:
+                return configuration['actions']
+        return rule_details.get('actions') or []
     
     def add_syslog_action_to_policy(self, policy_id, syslog_action_id):
         """Добавляет действие send_to_syslog в правила политики"""
@@ -107,7 +124,7 @@ class PoliciesManager:
                 print(f"Не удалось получить детали правила '{rule_name}'")
                 continue
             
-            current_actions = rule_details.get('actions', [])
+            current_actions = self._extract_rule_actions(rule_details, is_user_rule)
             
             # Проверяем, есть ли уже это действие в правиле
             if syslog_action_id in current_actions:
@@ -118,7 +135,7 @@ class PoliciesManager:
             
             # Обновляем только действия
             if is_user_rule:
-                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
+                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions, rule_details)
             else:
                 response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 
@@ -157,7 +174,7 @@ class PoliciesManager:
                 print(f"Не удалось получить детали правила '{rule_name}'")
                 continue
             
-            current_actions = rule_details.get('actions', [])
+            current_actions = self._extract_rule_actions(rule_details, is_user_rule)
             
             # Проверяем, есть ли старое действие в правиле
             if old_action_id not in current_actions:
@@ -168,7 +185,7 @@ class PoliciesManager:
             
             # Обновляем только действия
             if is_user_rule:
-                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions)
+                response = self.update_policy_user_rule_actions_only(policy_id, rule_id, new_actions, rule_details)
             else:
                 response = self.update_policy_system_rule_actions_only(policy_id, rule_id, new_actions)
                 

@@ -127,17 +127,31 @@ class APIClient:
         )
     
     def get_template_rules(self, template_id):
-        """Получить правила шаблона"""
+        """Получить правила пользовательского шаблона"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/rules",
             operation_name=f"Получение правил шаблона {template_id}"
         )
+
+    def get_vendor_template_rules(self, template_id):
+        """Получить правила системного (vendor) шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/vendor/{template_id}/rules",
+            operation_name=f"Получение правил vendor-шаблона {template_id}"
+        )
     
     def get_template_rule_details(self, template_id, rule_id):
-        """Получить детали правила шаблона"""
+        """Получить детали правила пользовательского шаблона"""
         return self.error_handler.safe_api_call(
             self._make_api_call, "GET", f"config/policies/templates/user/{template_id}/rules/{rule_id}",
             operation_name=f"Получение деталей правила {rule_id}"
+        )
+
+    def get_vendor_template_rule_details(self, template_id, rule_id):
+        """Получить детали правила системного (vendor) шаблона"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "GET", f"config/policies/templates/vendor/{template_id}/rules/{rule_id}",
+            operation_name=f"Получение деталей vendor-правила {rule_id}"
         )
     
     def update_template_rule(self, template_id, rule_id, update_data):
@@ -419,6 +433,24 @@ class APIClient:
             self._make_api_call, "PATCH", f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}", json=payload,
             operation_name=f"Изменение состояния правила {rule_id}"
         )
+
+    def update_user_rule_aggregation(self, template_id, rule_id, aggregation_data):
+        """Обновить настройки агрегации правила в наборе пользовательских правил"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH",
+            f"config/policies/templates/with_user_rules/{template_id}/rules/{rule_id}/aggregation",
+            json=aggregation_data,
+            operation_name=f"Обновление агрегации правила {rule_id} в наборе пользовательских правил"
+        )
+    def update_policy_user_rule_aggregation(self, template_id, rule_id, aggregation_data):
+        """Обновить агрегацию пользовательского правила в шаблоне политики"""
+        return self.error_handler.safe_api_call(
+            self._make_api_call, "PATCH",
+            f"config/policies/templates/user/{template_id}/user_rules/{rule_id}/aggregation",
+            json=aggregation_data,
+            operation_name=f"Обновление агрегации пользовательского правила {rule_id} в шаблоне"
+        )
+
     # ==================== УТИЛИТНЫЕ МЕТОДЫ ====================
     def _parse_response_items(self, response):
         """Парсит ответ API для извлечения items"""
